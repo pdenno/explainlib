@@ -1,0 +1,174 @@
+;;; This is from a very much constrained version of the type analysis proof. Good for checking proof-vecs
+;;; (-> "data/testing/proofs/whole-proof.edn" slurp read-string varize) ; in app.model.explain
+ [{:rule-used? true,
+   :rule-used :rule-1,
+   :proving (ta/conceptQuery demand),
+   :rhs-queries {:rhs ((ta/conceptType ta/DemandType demand)), :bindings {?x-r1 demand}},
+   :decomp
+   [{:prv (ta/conceptType ta/DemandType demand),
+     :caller {:rule-id :rule-1, :sol (ta/conceptType ta/DemandType demand), :bindings {?x-r1 demand}},
+     :proofs
+     [{:rule-used? true,
+       :rule-used :rule-2,
+       :proving (ta/conceptType ta/DemandType demand),
+       :rhs-queries {:rhs ((ta/conceptRefScheme ta/DemandType ?y-r2) (ta/conceptVar ta/DemandType ?y-r2) (py/link demand ?y-r2) (ta/conceptSheet ta/DemandType demand)), :bindings {?type-r2 ta/DemandType, ?x-r2 demand}},
+       :decomp
+       [{:prv (ta/conceptRefScheme ta/DemandType ?y-r2),
+         :caller {:rule-id :rule-2, :sol (ta/conceptRefScheme ta/DemandType ?y-r2), :bindings {?x-r1 demand, ?type-r2 ta/DemandType, ?x-r2 demand}},
+         :proofs
+         [{:rule-used? true,
+           :rule-used :rule-5,
+           :proving (ta/conceptRefScheme ta/DemandType demand),
+           :rhs-queries {:rhs ((mz/indexedBy demand ProductType) (ta/simMatchVar demand ta/DemandType) (ta/simMatchVar ProductType ta/ProductType)), :bindings {?x-r5 demand, ?p-r5 ProductType}},
+           :decomp
+           [{:prv (mz/indexedBy demand ProductType),
+             :caller {:rule-id :rule-5, :sol (mz/indexedBy demand ProductType), :bindings {?x-r1 demand, ?type-r2 ta/DemandType, ?x-r2 demand, ?x-r5 demand, ?p-r5 ProductType}},
+             :proofs [{:prvn (mz/indexedBy demand ProductType), :observation-used? true}]}
+            {:prv (ta/simMatchVar demand ta/DemandType),
+             :caller {:rule-id :rule-5, :sol (ta/simMatchVar demand ta/DemandType), :bindings {?x-r1 demand, ?type-r2 ta/DemandType, ?x-r2 demand, ?x-r5 demand, ?p-r5 ProductType}},
+             :proofs [{:prvn (ta/simMatchVar demand ta/DemandType), :fact-used? true}]}
+            {:prv (ta/simMatchVar ProductType ta/ProductType),
+             :caller {:rule-id :rule-5, :sol (ta/simMatchVar ProductType ta/ProductType), :bindings {?x-r1 demand, ?type-r2 ta/DemandType, ?x-r2 demand, ?x-r5 demand, ?p-r5 ProductType}},
+             :proofs [{:prvn (ta/simMatchVar ProductType ta/ProductType), :fact-used? true}]}]}]}
+        {:prv (ta/conceptVar ta/DemandType ?y-r2),
+         :caller {:rule-id :rule-2, :sol (ta/conceptVar ta/DemandType ?y-r2), :bindings {}},
+         :proofs
+         [{:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType demand),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar demand ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 demand}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 demand}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar demand ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar demand ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 demand}},
+             :proofs [{:prvn (ta/simMatchVar demand ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType ProcessTimes),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar ProcessTimes ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 ProcessTimes}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 ProcessTimes}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar ProcessTimes ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar ProcessTimes ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 ProcessTimes}},
+             :proofs [{:prvn (ta/simMatchVar ProcessTimes ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType rho),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar rho ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 rho}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 rho}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar rho ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar rho ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 rho}},
+             :proofs [{:prvn (ta/simMatchVar rho ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType ProductType),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar ProductType ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 ProductType}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 ProductType}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar ProductType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar ProductType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 ProductType}},
+             :proofs [{:prvn (ta/simMatchVar ProductType ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType overload),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar overload ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 overload}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 overload}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar overload ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar overload ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 overload}},
+             :proofs [{:prvn (ta/simMatchVar overload ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType start_time),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar start_time ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 start_time}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 start_time}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar start_time ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar start_time ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 start_time}},
+             :proofs [{:prvn (ta/simMatchVar start_time ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType Demand),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar Demand ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 Demand}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 Demand}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar Demand ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar Demand ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 Demand}},
+             :proofs [{:prvn (ta/simMatchVar Demand ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType ptime),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar ptime ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 ptime}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 ptime}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar ptime ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar ptime ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 ptime}},
+             :proofs [{:prvn (ta/simMatchVar ptime ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType Workers),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar Workers ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 Workers}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 Workers}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar Workers ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar Workers ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 Workers}},
+             :proofs [{:prvn (ta/simMatchVar Workers ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType sequence),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar sequence ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 sequence}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 sequence}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar sequence ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar sequence ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 sequence}},
+             :proofs [{:prvn (ta/simMatchVar sequence ta/DemandType), :fact-used? true}]}]}
+          {:rule-used? true,
+           :rule-used :rule-4,
+           :proving (ta/conceptVar ta/DemandType nWorkers),
+           :rhs-queries {:rhs ((ta/isType ta/DemandType) (ta/simMatchVar nWorkers ta/DemandType)), :bindings {?type-r4 ta/DemandType, ?x-r4 nWorkers}},
+           :decomp
+           [{:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/isType ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 nWorkers}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchVar nWorkers ta/DemandType),
+             :caller {:rule-id :rule-4, :sol (ta/simMatchVar nWorkers ta/DemandType), :bindings {?type-r4 ta/DemandType, ?x-r4 nWorkers}},
+             :proofs [{:prvn (ta/simMatchVar nWorkers ta/DemandType), :fact-used? true}]}]}]}
+        {:prv (py/link demand ?y-r2), :caller {:rule-id :rule-2, :sol (py/link demand ?y-r2), :bindings {?x-r1 demand}}, :proofs [{:prvn (py/link demand Demand), :bindings {?y-r2 Demand}, :observation-used? true}]}
+        {:prv (ta/conceptSheet ta/DemandType demand),
+         :caller {:rule-id :rule-2, :sol (ta/conceptSheet ta/DemandType demand), :bindings {?x-r1 demand, ?y-r2 Demand}},
+         :proofs
+         [{:rule-used? true,
+           :rule-used :rule-3,
+           :proving (ta/conceptSheet ta/DemandType demand),
+           :rhs-queries {:rhs ((py/sheetName demand) (ta/isType ta/DemandType) (ta/simMatchExcelSheet demand ta/DemandType)), :bindings {?x-r3 demand, ?type-r3 ta/DemandType}},
+           :decomp
+           [{:prv (py/sheetName demand),
+             :caller {:rule-id :rule-3, :sol (py/sheetName demand), :bindings {?x-r1 demand, ?y-r2 Demand, ?x-r3 demand, ?type-r3 ta/DemandType}},
+             :proofs [{:prvn (py/sheetName demand), :observation-used? true}]}
+            {:prv (ta/isType ta/DemandType),
+             :caller {:rule-id :rule-3, :sol (ta/isType ta/DemandType), :bindings {?x-r1 demand, ?y-r2 Demand, ?x-r3 demand, ?type-r3 ta/DemandType}},
+             :proofs [{:prvn (ta/isType ta/DemandType), :observation-used? true}]}
+            {:prv (ta/simMatchExcelSheet demand ta/DemandType),
+             :caller {:rule-id :rule-3, :sol (ta/simMatchExcelSheet demand ta/DemandType), :bindings {?x-r1 demand, ?y-r2 Demand, ?x-r3 demand, ?type-r3 ta/DemandType}},
+             :proofs [{:prvn (ta/simMatchExcelSheet demand ta/DemandType), :fact-used? true}]}]}]}]}]}]}]

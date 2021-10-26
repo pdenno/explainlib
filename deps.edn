@@ -1,10 +1,13 @@
 {:paths ["src" "resources"]
  :mvn/repos {"central" {:url "https://repo1.maven.org/maven2/"}
              "clojars" {:url "https://clojars.org/repo"}}
- :deps {org.clojure/clojure            {:mvn/version "1.10.1"}
-        clj-python/libpython-clj       {:mvn/version "2.003"}
+ :deps {clj-python/libpython-clj       {:mvn/version "2.003"}
+        com.taoensso/timbre            {:mvn/version "5.1.2"}
         cprop/cprop                    {:mvn/version "0.1.19"}
-        org.clojure/data.csv           {:mvn/version "0.1.4"}}
+        org.clojure/clojure            {:mvn/version "1.10.3"} ; POD was 1.10.1
+        org.clojure/core.unify         {:mvn/version "0.5.7"}
+        org.clojure/math.combinatorics {:mvn/version "0.1.6"}
+        #_#_org.clojure/data.csv           {:mvn/version "0.1.4"}}
  :aliases
  ;; :jdk-17 See https://github.com/clj-python/libpython-clj/issues/180 for mac
  {:jdk-17 {:jvm-opts ["--add-modules" "jdk.incubator.foreign"

@@ -1,0 +1,386 @@
+{:contingent-observations
+ [(pd/table ProcTimes)
+  (ta/isSequence Workstation-1)
+  (ta/isSequence Workstation-2)
+  (ta/isSequence Workstation-3)
+  (pd/tableColumn ProcTimes Product)
+  (pd/tableColumn ProcTimes Workstation-1)
+  (pd/tableColumn ProcTimes Workstation-2)
+  (pd/tableColumn ProcTimes Workstation-3)
+  (pd/tableColumnType ProcTimes Product string)
+  (pd/tableColumnType ProcTimes Workstation-1 int)
+  (pd/tableColumnType ProcTimes Workstation-2 int)
+  (pd/tableColumnType ProcTimes Workstation-3 int)
+  (py/sheetName process_times)
+  (py/varAssign ProcTimes)
+  (py/linkSheetToDF process_times ProcTimes)
+  (pd/table Dmd)
+  (pd/tableColumn Dmd Product_Type)
+  (pd/tableColumn Dmd Demand)
+  (pd/tableColumnType Dmd Product_Type string)
+  (pd/tableColumnType Dmd Demand int)
+  (py/sheetName demand)
+  (py/varAssign Dmd)
+  (py/linkSheetToDF demand Dmd)
+  (pd/table Wrkrs)
+  (pd/tableColumn Wrkrs Workstation)
+  (pd/tableColumn Wrkrs Workers)
+  (pd/tableColumnType Wrkrs Workstation int)
+  (pd/tableColumnType Wrkrs Workers int)
+  (py/sheetName workers_needed)
+  (py/varAssign Wrkrs)
+  (py/linkSheetToDF workers_needed Wrkrs)
+  (mz/integer maxtime)
+  (mz/indexSet ProductType)
+  (mz/setIsEnum ProductType)
+  (mz/isListK ProductType)
+  (mz/sizeK ProductType 3)
+  (mz/indexSet LaunchSequence)
+  (mz/setRangeLow LaunchSequence 1)
+  (mz/setRangeHigh LaunchSequence TotalToProduce)
+  (mz/indexSet Workstation)
+  (mz/setRangeLow Workstation 1)
+  (mz/setRangeHigh Workstation NumWorkstations)
+  (mz/integer cycletime)
+  (mz/integer TotalToProduce)
+  (mz/indexedBy-1 rho LaunchSequence)
+  (mz/indexedBy-2 rho Workstation)
+  (mz/isDecisionVar rho)
+  (mz/isListK rho)
+  (mz/sizeK rho 6)
+  (mz/indexedBy-1 start_time LaunchSequence)
+  (mz/indexedBy-2 start_time Workstation)
+  (mz/isDecisionVar start_time)
+  (mz/isListK start_time)
+  (mz/sizeK start_time 6)
+  (mz/indexedBy-1 overload LaunchSequence)
+  (mz/indexedBy-2 overload Workstation)
+  (mz/isDecisionVar overload)
+  (mz/isListK overload)
+  (mz/sizeK overload 6)
+  (mz/array x3)
+  (ta/isSequence x3)
+  (mz/indexedBy x3 Workstation)
+  (mz/isListK x3)
+  (mz/sizeK x3 3)
+  (mz/array sequence)
+  (mz/indexedBy sequence LaunchSequence)
+  (mz/baseType sequence ProductType)
+  (mz/isDecisionVar sequence)
+  (mz/isListK sequence)
+  (mz/sizeK sequence 6)
+  (mz/integer NumWorkstations)
+  (mz/array x1)
+  (ta/isSequence x1)
+  (mz/indexedBy x1 ProductType)
+  (mz/isListK x1)
+  (mz/sizeK x1 3)
+  (mz/integer windowSize)
+  (mz/indexedBy-1 x2 ProductType)
+  (mz/indexedBy-2 x2 Workstation)
+  (ta/isSequence x2)
+  (mz/isListK x2)
+  (mz/sizeK x2 3)],
+ :contingent-facts
+ [{:prob 0.34902810097341186,
+   :fact (ta/simMatchColName Product ta/DemandType)}
+  {:prob 0.3083102965030136,
+   :fact (ta/simMatchColName Product ta/WorkerType)}
+  {:prob 0.3765737603151671,
+   :fact (ta/simMatchColName Product ta/MachineType)}
+  {:prob 0.99, :fact (ta/simMatchColName Product ta/ProductType)}
+  {:prob 0.5079365079365079,
+   :fact (ta/simMatchColName Product ta/ProcessDurationType)}
+  {:prob 0.23831234499721443,
+   :fact (ta/simMatchColName Product ta/JobType)}
+  {:prob 0.03125,
+   :fact (ta/simMatchColName Workstation-1 ta/DemandType)}
+  {:prob 0.5857142857142856,
+   :fact (ta/simMatchColName Workstation-1 ta/WorkerType)}
+  {:prob 0.99, :fact (ta/simMatchColName Workstation-1 ta/MachineType)}
+  {:prob 0.16666666666666663,
+   :fact (ta/simMatchColName Workstation-1 ta/ProductType)}
+  {:prob 0.0625,
+   :fact (ta/simMatchColName Workstation-1 ta/ProcessDurationType)}
+  {:prob 0.125, :fact (ta/simMatchColName Workstation-1 ta/JobType)}
+  {:prob 0.03125,
+   :fact (ta/simMatchColName Workstation-2 ta/DemandType)}
+  {:prob 0.5857142857142856,
+   :fact (ta/simMatchColName Workstation-2 ta/WorkerType)}
+  {:prob 0.99, :fact (ta/simMatchColName Workstation-2 ta/MachineType)}
+  {:prob 0.16666666666666663,
+   :fact (ta/simMatchColName Workstation-2 ta/ProductType)}
+  {:prob 0.0625,
+   :fact (ta/simMatchColName Workstation-2 ta/ProcessDurationType)}
+  {:prob 0.125, :fact (ta/simMatchColName Workstation-2 ta/JobType)}
+  {:prob 0.03125,
+   :fact (ta/simMatchColName Workstation-3 ta/DemandType)}
+  {:prob 0.5857142857142856,
+   :fact (ta/simMatchColName Workstation-3 ta/WorkerType)}
+  {:prob 0.99, :fact (ta/simMatchColName Workstation-3 ta/MachineType)}
+  {:prob 0.16666666666666663,
+   :fact (ta/simMatchColName Workstation-3 ta/ProductType)}
+  {:prob 0.0625,
+   :fact (ta/simMatchColName Workstation-3 ta/ProcessDurationType)}
+  {:prob 0.125, :fact (ta/simMatchColName Workstation-3 ta/JobType)}
+  {:prob 0.3365931247858419,
+   :fact (ta/simMatchExcelSheet process_times ta/DemandType)}
+  {:prob 0.42123515804244094,
+   :fact (ta/simMatchExcelSheet process_times ta/WorkerType)}
+  {:prob 0.30264418533337384,
+   :fact (ta/simMatchExcelSheet process_times ta/MachineType)}
+  {:prob 0.4365079365079365,
+   :fact (ta/simMatchExcelSheet process_times ta/ProductType)}
+  {:prob 0.9677702539596446,
+   :fact (ta/simMatchExcelSheet process_times ta/ProcessDurationType)}
+  {:prob 0.5045684913757743,
+   :fact (ta/simMatchExcelSheet process_times ta/JobType)}
+  {:prob 0.525, :fact (ta/simMatchVar ProcTimes ta/DemandType)}
+  {:prob 0.0714285714285714,
+   :fact (ta/simMatchVar ProcTimes ta/WorkerType)}
+  {:prob 0.09999999999999998,
+   :fact (ta/simMatchVar ProcTimes ta/MachineType)}
+  {:prob 0.6333333333333333,
+   :fact (ta/simMatchVar ProcTimes ta/ProductType)}
+  {:prob 0.99, :fact (ta/simMatchVar ProcTimes ta/ProcessDurationType)}
+  {:prob 0.55, :fact (ta/simMatchVar ProcTimes ta/JobType)}
+  {:prob 0.08333333333333331,
+   :fact (ta/simMatchColName Product_Type ta/DemandType)}
+  {:prob 0.5357142857142857,
+   :fact (ta/simMatchColName Product_Type ta/WorkerType)}
+  {:prob 0.0714285714285714,
+   :fact (ta/simMatchColName Product_Type ta/MachineType)}
+  {:prob 0.7083333333333334,
+   :fact (ta/simMatchColName Product_Type ta/ProductType)}
+  {:prob 0.5833333333333334,
+   :fact (ta/simMatchColName Product_Type ta/ProcessDurationType)}
+  {:prob 0.55, :fact (ta/simMatchColName Product_Type ta/JobType)}
+  {:prob 0.6052672836097184,
+   :fact (ta/simMatchColName Demand ta/DemandType)}
+  {:prob 0.3384500101321415,
+   :fact (ta/simMatchColName Demand ta/WorkerType)}
+  {:prob 0.25443639342548147,
+   :fact (ta/simMatchColName Demand ta/MachineType)}
+  {:prob 0.28293658416080447,
+   :fact (ta/simMatchColName Demand ta/ProductType)}
+  {:prob 0.3334498564465298,
+   :fact (ta/simMatchColName Demand ta/ProcessDurationType)}
+  {:prob 0.5045684913757743,
+   :fact (ta/simMatchColName Demand ta/JobType)}
+  {:prob 0.6052672836097184,
+   :fact (ta/simMatchExcelSheet demand ta/DemandType)}
+  {:prob 0.3384500101321415,
+   :fact (ta/simMatchExcelSheet demand ta/WorkerType)}
+  {:prob 0.25443639342548147,
+   :fact (ta/simMatchExcelSheet demand ta/MachineType)}
+  {:prob 0.28293658416080447,
+   :fact (ta/simMatchExcelSheet demand ta/ProductType)}
+  {:prob 0.3334498564465298,
+   :fact (ta/simMatchExcelSheet demand ta/ProcessDurationType)}
+  {:prob 0.5045684913757743,
+   :fact (ta/simMatchExcelSheet demand ta/JobType)}
+  {:prob 0.5333333333333333, :fact (ta/simMatchVar Dmd ta/DemandType)}
+  {:prob 0.17482028150515094, :fact (ta/simMatchVar Dmd ta/WorkerType)}
+  {:prob 0.17360817326676026,
+   :fact (ta/simMatchVar Dmd ta/MachineType)}
+  {:prob 0.15251826493765797,
+   :fact (ta/simMatchVar Dmd ta/ProductType)}
+  {:prob 3.3333366666699995E-7,
+   :fact (ta/simMatchVar Dmd ta/ProcessDurationType)}
+  {:prob 0.18492567234506538, :fact (ta/simMatchVar Dmd ta/JobType)}
+  {:prob 0.12694661332238363,
+   :fact (ta/simMatchColName Workstation ta/DemandType)}
+  {:prob 0.4, :fact (ta/simMatchColName Workstation ta/WorkerType)}
+  {:prob 0.99, :fact (ta/simMatchColName Workstation ta/MachineType)}
+  {:prob 0.3570106582348786,
+   :fact (ta/simMatchColName Workstation ta/ProductType)}
+  {:prob 0.11071428571428571,
+   :fact (ta/simMatchColName Workstation ta/ProcessDurationType)}
+  {:prob 0.11814608264643221,
+   :fact (ta/simMatchColName Workstation ta/JobType)}
+  {:prob 0.26865164746337544,
+   :fact (ta/simMatchColName Workers ta/DemandType)}
+  {:prob 0.99, :fact (ta/simMatchColName Workers ta/WorkerType)}
+  {:prob 0.5982142857142857,
+   :fact (ta/simMatchColName Workers ta/MachineType)}
+  {:prob 0.4492047208810701,
+   :fact (ta/simMatchColName Workers ta/ProductType)}
+  {:prob 0.5629422497437504,
+   :fact (ta/simMatchColName Workers ta/ProcessDurationType)}
+  {:prob 0.6368386624507726,
+   :fact (ta/simMatchColName Workers ta/JobType)}
+  {:prob 0.4369594655365469,
+   :fact (ta/simMatchExcelSheet workers_needed ta/DemandType)}
+  {:prob 0.6901336418048591,
+   :fact (ta/simMatchExcelSheet workers_needed ta/WorkerType)}
+  {:prob 0.6568003084715259,
+   :fact (ta/simMatchExcelSheet workers_needed ta/MachineType)}
+  {:prob 0.5272360022453942,
+   :fact (ta/simMatchExcelSheet workers_needed ta/ProductType)}
+  {:prob 0.5841047666767344,
+   :fact (ta/simMatchExcelSheet workers_needed ta/ProcessDurationType)}
+  {:prob 0.6210529730302454,
+   :fact (ta/simMatchExcelSheet workers_needed ta/JobType)}
+  {:prob 0.04999999999999999,
+   :fact (ta/simMatchVar Wrkrs ta/DemandType)}
+  {:prob 0.99, :fact (ta/simMatchVar Wrkrs ta/WorkerType)}
+  {:prob 0.4444444444444444,
+   :fact (ta/simMatchVar Wrkrs ta/MachineType)}
+  {:prob 0.5833333333333334,
+   :fact (ta/simMatchVar Wrkrs ta/ProductType)}
+  {:prob 0.08333333333333331,
+   :fact (ta/simMatchVar Wrkrs ta/ProcessDurationType)}
+  {:prob 0.09999999999999998, :fact (ta/simMatchVar Wrkrs ta/JobType)}
+  {:prob 0.1444391940618721,
+   :fact (ta/simMatchVar maxtime ta/DemandType)}
+  {:prob 0.31468261590683627,
+   :fact (ta/simMatchVar maxtime ta/WorkerType)}
+  {:prob 0.260543103380436,
+   :fact (ta/simMatchVar maxtime ta/MachineType)}
+  {:prob 0.3586012164727384,
+   :fact (ta/simMatchVar maxtime ta/ProductType)}
+  {:prob 0.2209672749030359,
+   :fact (ta/simMatchVar maxtime ta/ProcessDurationType)}
+  {:prob 0.13396430474042123,
+   :fact (ta/simMatchVar maxtime ta/JobType)}
+  {:prob 0.08333333333333331,
+   :fact (ta/simMatchVar ProductType ta/DemandType)}
+  {:prob 0.5357142857142857,
+   :fact (ta/simMatchVar ProductType ta/WorkerType)}
+  {:prob 0.0714285714285714,
+   :fact (ta/simMatchVar ProductType ta/MachineType)}
+  {:prob 0.7083333333333334,
+   :fact (ta/simMatchVar ProductType ta/ProductType)}
+  {:prob 0.5833333333333334,
+   :fact (ta/simMatchVar ProductType ta/ProcessDurationType)}
+  {:prob 0.55, :fact (ta/simMatchVar ProductType ta/JobType)}
+  {:prob 0.3425152388034497,
+   :fact (ta/simMatchVar LaunchSequence ta/DemandType)}
+  {:prob 0.3149264901734198,
+   :fact (ta/simMatchVar LaunchSequence ta/WorkerType)}
+  {:prob 0.35478005155357184,
+   :fact (ta/simMatchVar LaunchSequence ta/MachineType)}
+  {:prob 0.37048204572897536,
+   :fact (ta/simMatchVar LaunchSequence ta/ProductType)}
+  {:prob 0.358664873438809,
+   :fact (ta/simMatchVar LaunchSequence ta/ProcessDurationType)}
+  {:prob 0.4203944545765859,
+   :fact (ta/simMatchVar LaunchSequence ta/JobType)}
+  {:prob 0.12694661332238363,
+   :fact (ta/simMatchVar Workstation ta/DemandType)}
+  {:prob 0.4, :fact (ta/simMatchVar Workstation ta/WorkerType)}
+  {:prob 0.99, :fact (ta/simMatchVar Workstation ta/MachineType)}
+  {:prob 0.3570106582348786,
+   :fact (ta/simMatchVar Workstation ta/ProductType)}
+  {:prob 0.11071428571428571,
+   :fact (ta/simMatchVar Workstation ta/ProcessDurationType)}
+  {:prob 0.11814608264643221,
+   :fact (ta/simMatchVar Workstation ta/JobType)}
+  {:prob 0.3951981807303002,
+   :fact (ta/simMatchVar cycletime ta/DemandType)}
+  {:prob 0.0357142857142857,
+   :fact (ta/simMatchVar cycletime ta/WorkerType)}
+  {:prob 0.4160315140636336,
+   :fact (ta/simMatchVar cycletime ta/MachineType)}
+  {:prob 0.40144818073030025,
+   :fact (ta/simMatchVar cycletime ta/ProductType)}
+  {:prob 0.41186484739696694,
+   :fact (ta/simMatchVar cycletime ta/ProcessDurationType)}
+  {:prob 0.42019818073030024,
+   :fact (ta/simMatchVar cycletime ta/JobType)}
+  {:prob 0.43289159736886984,
+   :fact (ta/simMatchVar TotalToProduce ta/DemandType)}
+  {:prob 0.419127448063209,
+   :fact (ta/simMatchVar TotalToProduce ta/WorkerType)}
+  {:prob 0.4171254255670386,
+   :fact (ta/simMatchVar TotalToProduce ta/MachineType)}
+  {:prob 0.7083333333333334,
+   :fact (ta/simMatchVar TotalToProduce ta/ProductType)}
+  {:prob 0.5833333333333334,
+   :fact (ta/simMatchVar TotalToProduce ta/ProcessDurationType)}
+  {:prob 0.4222536436239378,
+   :fact (ta/simMatchVar TotalToProduce ta/JobType)}
+  {:prob 0.20475692450569674, :fact (ta/simMatchVar rho ta/DemandType)}
+  {:prob 0.3083102965030136, :fact (ta/simMatchVar rho ta/WorkerType)}
+  {:prob 0.23529200712366638,
+   :fact (ta/simMatchVar rho ta/MachineType)}
+  {:prob 0.2611653190368409, :fact (ta/simMatchVar rho ta/ProductType)}
+  {:prob 0.09999999999999998,
+   :fact (ta/simMatchVar rho ta/ProcessDurationType)}
+  {:prob 0.18928297082001092, :fact (ta/simMatchVar rho ta/JobType)}
+  {:prob 0.26902445655282387,
+   :fact (ta/simMatchVar start_time ta/DemandType)}
+  {:prob 0.2611653190368409,
+   :fact (ta/simMatchVar start_time ta/WorkerType)}
+  {:prob 0.29524899243556507,
+   :fact (ta/simMatchVar start_time ta/MachineType)}
+  {:prob 0.2928571428571428,
+   :fact (ta/simMatchVar start_time ta/ProductType)}
+  {:prob 0.3334498564465298,
+   :fact (ta/simMatchVar start_time ta/ProcessDurationType)}
+  {:prob 0.4622766163059067,
+   :fact (ta/simMatchVar start_time ta/JobType)}
+  {:prob 0.15439229312278607,
+   :fact (ta/simMatchVar overload ta/DemandType)}
+  {:prob 0.2611653190368409,
+   :fact (ta/simMatchVar overload ta/WorkerType)}
+  {:prob 0.3458250041727875,
+   :fact (ta/simMatchVar overload ta/MachineType)}
+  {:prob 0.4492047208810701,
+   :fact (ta/simMatchVar overload ta/ProductType)}
+  {:prob 0.3890054120020854,
+   :fact (ta/simMatchVar overload ta/ProcessDurationType)}
+  {:prob 0.14284658666236635,
+   :fact (ta/simMatchVar overload ta/JobType)}
+  {:prob 0.001, :fact (ta/simMatchVar x3 ta/DemandType)}
+  {:prob 0.001, :fact (ta/simMatchVar x3 ta/WorkerType)}
+  {:prob 0.001, :fact (ta/simMatchVar x3 ta/MachineType)}
+  {:prob 0.001, :fact (ta/simMatchVar x3 ta/ProductType)}
+  {:prob 0.001, :fact (ta/simMatchVar x3 ta/ProcessDurationType)}
+  {:prob 0.001, :fact (ta/simMatchVar x3 ta/JobType)}
+  {:prob 0.26902445655282387,
+   :fact (ta/simMatchVar sequence ta/DemandType)}
+  {:prob 0.21053456721943667,
+   :fact (ta/simMatchVar sequence ta/WorkerType)}
+  {:prob 0.322603325587921,
+   :fact (ta/simMatchVar sequence ta/MachineType)}
+  {:prob 0.3570106582348786,
+   :fact (ta/simMatchVar sequence ta/ProductType)}
+  {:prob 0.28999084785658763,
+   :fact (ta/simMatchVar sequence ta/ProcessDurationType)}
+  {:prob 0.42733889902103034,
+   :fact (ta/simMatchVar sequence ta/JobType)}
+  {:prob 0.5505952380952381,
+   :fact (ta/simMatchVar NumWorkstations ta/DemandType)}
+  {:prob 0.5857142857142856,
+   :fact (ta/simMatchVar NumWorkstations ta/WorkerType)}
+  {:prob 0.99, :fact (ta/simMatchVar NumWorkstations ta/MachineType)}
+  {:prob 0.6041666666666666,
+   :fact (ta/simMatchVar NumWorkstations ta/ProductType)}
+  {:prob 0.0625,
+   :fact (ta/simMatchVar NumWorkstations ta/ProcessDurationType)}
+  {:prob 0.125, :fact (ta/simMatchVar NumWorkstations ta/JobType)}
+  {:prob 0.001, :fact (ta/simMatchVar x1 ta/DemandType)}
+  {:prob 0.001, :fact (ta/simMatchVar x1 ta/WorkerType)}
+  {:prob 0.001, :fact (ta/simMatchVar x1 ta/MachineType)}
+  {:prob 0.001, :fact (ta/simMatchVar x1 ta/ProductType)}
+  {:prob 0.001, :fact (ta/simMatchVar x1 ta/ProcessDurationType)}
+  {:prob 0.001, :fact (ta/simMatchVar x1 ta/JobType)}
+  {:prob 0.3617631446440585,
+   :fact (ta/simMatchVar windowSize ta/DemandType)}
+  {:prob 0.3798636488794005,
+   :fact (ta/simMatchVar windowSize ta/WorkerType)}
+  {:prob 0.4266822369565818,
+   :fact (ta/simMatchVar windowSize ta/MachineType)}
+  {:prob 0.4847272215345044,
+   :fact (ta/simMatchVar windowSize ta/ProductType)}
+  {:prob 0.041666666666666685,
+   :fact (ta/simMatchVar windowSize ta/ProcessDurationType)}
+  {:prob 0.35112519089912647,
+   :fact (ta/simMatchVar windowSize ta/JobType)}
+  {:prob 0.001, :fact (ta/simMatchVar x2 ta/DemandType)}
+  {:prob 0.001, :fact (ta/simMatchVar x2 ta/WorkerType)}
+  {:prob 0.001, :fact (ta/simMatchVar x2 ta/MachineType)}
+  {:prob 0.001, :fact (ta/simMatchVar x2 ta/ProductType)}
+  {:prob 0.001, :fact (ta/simMatchVar x2 ta/ProcessDurationType)}
+  {:prob 0.001, :fact (ta/simMatchVar x2 ta/JobType)}]}

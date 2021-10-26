@@ -1,0 +1,59 @@
+[{:ast/type "Assign",
+  :Assign/end_col_offset 60,
+  :Assign/end_lineno 1,
+  :Assign/targets
+  [{:ast/type "Name",
+    :ast/ctx "Store",
+    :Name/end_col_offset 9,
+    :Name/end_lineno 1,
+    :Name/id "RouteLHPG"}],
+  :Assign/value
+  {:ast/type "Call",
+   :Call/args
+   [{:ast/type "Dict",
+     :Dict/end_col_offset 59,
+     :Dict/end_lineno 1,
+     :Dict/keys
+     [{:ast/type "Constant",
+       :Constant/end_col_offset 50,
+       :Constant/end_lineno 1,
+       :Constant/value "lhpg"}],
+     :Dict/values
+     [{:ast/type "Constant",
+       :Constant/end_col_offset 58,
+       :Constant/end_lineno 1,
+       :Constant/value "mean"}]}],
+   :Call/end_col_offset 60,
+   :Call/end_lineno 1,
+   :Call/func
+   {:ast/type "Attribute",
+    :ast/ctx "Load",
+    :Attribute/attr "agg",
+    :Attribute/end_col_offset 42,
+    :Attribute/end_lineno 1,
+    :Attribute/value
+    {:ast/type "Call",
+     :Call/args
+     [{:ast/type "Constant",
+       :Constant/end_col_offset 37,
+       :Constant/end_lineno 1,
+       :Constant/value "route"}],
+     :Call/end_col_offset 38,
+     :Call/end_lineno 1,
+     :Call/func
+     {:ast/type "Attribute",
+      :ast/ctx "Load",
+      :Attribute/attr "groupby",
+      :Attribute/end_col_offset 29,
+      :Attribute/end_lineno 1,
+      :Attribute/value
+      {:ast/type "Name",
+       :ast/ctx "Load",
+       :Name/end_col_offset 21,
+       :Name/end_lineno 1,
+       :Name/id "LineRates"}},
+     :Call/keywords []}},
+   :Call/keywords []},
+  :meta/code
+  "RouteLHPG = LineRates.groupby('route').agg({'lhpg': 'mean'})",
+  :meta/line 1}]

@@ -1,0 +1,116 @@
+{:excel
+ [{:call-entity 70,
+   :func-name "read_excel",
+   :src
+   {:cell 3,
+    :line 1,
+    :code
+    "ProcessTimes = pd.read_excel('bautista.xlsx', sheet_name='process_times')"},
+   :args ["bautista.xlsx"],
+   :keys {:sheet_name "process_times"},
+   :object "pd",
+   :target "ProcessTimes"}
+  {:call-entity 78,
+   :func-name "read_excel",
+   :src
+   {:cell 3,
+    :line 2,
+    :code
+    "Demand       = pd.read_excel('bautista.xlsx', sheet_name='demand')"},
+   :args ["bautista.xlsx"],
+   :keys {:sheet_name "demand"},
+   :object "pd",
+   :target "Demand"}
+  {:call-entity 86,
+   :func-name "read_excel",
+   :src
+   {:cell 3,
+    :line 3,
+    :code
+    "Workers      = pd.read_excel('bautista.xlsx', sheet_name='workers_on_ws')"},
+   :args ["bautista.xlsx"],
+   :keys {:sheet_name "workers_on_ws"},
+   :object "pd",
+   :target "Workers"}],
+ :groupby [],
+ :mzn-observations
+ [{:name "maxtime", :type :var, :vartype :int}
+  {:name "ProductType",
+   :type :var,
+   :vartype :mzn-enum,
+   :kval ["A" "B" "C"],
+   :kshape {:type "list", :size 3}}
+  {:name "nWorkers",
+   :type :var,
+   :vartype :mzn-array,
+   :kval [1 2 1],
+   :kshape {:type "list", :size 3},
+   :basetype :int,
+   :array-index "Workstation"}
+  {:name "LaunchSequence",
+   :type :var,
+   :vartype :mzn-set,
+   :basetype :int,
+   :set-range-low 1,
+   :set-range-high "TotalToProduce"}
+  {:name "Workstation",
+   :type :var,
+   :vartype :mzn-set,
+   :basetype :int,
+   :set-range-low 1,
+   :set-range-high "NumWorkstations"}
+  {:name "cycletime", :type :var, :vartype :int}
+  {:name "TotalToProduce", :type :var, :vartype :int}
+  {:basetype :int,
+   :name "rho",
+   :kval [[3 4 5] [5 5 4] [5 5 4] [4 4 3] [3 4 5] [5 5 4]],
+   :array-index-1 "LaunchSequence",
+   :type :var,
+   :vartype :mzn-2d-array,
+   :decision-var? true,
+   :kshape {:type "list", :size 6},
+   :array-index-2 "Workstation"}
+  {:basetype (mznf/range 0 maxtime),
+   :name "start_time",
+   :kval
+   [[0 4 8] [4 9 14] [9 14 18] [14 18 22] [18 22 26] [21 26 30]],
+   :array-index-1 "LaunchSequence",
+   :type :var,
+   :vartype :mzn-2d-array,
+   :decision-var? true,
+   :kshape {:type "list", :size 6},
+   :array-index-2 "Workstation"}
+  {:basetype :int,
+   :name "overload",
+   :kval [[0 0 0] [0 0 0] [0 1 0] [0 0 0] [0 0 1] [0 1 0]],
+   :array-index-1 "LaunchSequence",
+   :type :var,
+   :vartype :mzn-2d-array,
+   :decision-var? true,
+   :kshape {:type "list", :size 6},
+   :array-index-2 "Workstation"}
+  {:name "sequence",
+   :type :var,
+   :vartype :mzn-array,
+   :kval [{:e "C"} {:e "A"} {:e "A"} {:e "B"} {:e "C"} {:e "A"}],
+   :kshape {:type "list", :size 6},
+   :decision-var? true,
+   :basetype "ProductType",
+   :array-index "LaunchSequence"}
+  {:name "ptime",
+   :type :var,
+   :vartype :mzn-2d-array,
+   :kval [[5 5 4] [4 4 3] [3 4 5]],
+   :kshape {:type "list", :size 3},
+   :basetype :int,
+   :array-index-1 "ProductType",
+   :array-index-2 "Workstation"}
+  {:name "NumWorkstations", :type :var, :vartype :int}
+  {:name "windowSize", :type :var, :vartype :int}
+  {:name "demand",
+   :type :var,
+   :vartype :mzn-array,
+   :kval [3 1 2],
+   :kshape {:type "list", :size 3},
+   :basetype :int,
+   :array-index "ProductType"}]}

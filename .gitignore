@@ -1,0 +1,16 @@
+*~
+*.iml
+*.log
+*.sw?
+*.swp
+*jar
+.DS_Store
+.nrepl*
+.nrepl-port
+.repl
+checkouts
+classes
+compiled
+target
+.cpcache
+.clj-kondo/.cache

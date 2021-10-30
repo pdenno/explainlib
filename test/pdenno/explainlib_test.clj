@@ -142,7 +142,7 @@
   :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]
   :facts [{:prob 0.3 :fact (cee ?x)}]
-  :observations [(dee foo)])
+  :observations [])
 
 ;;; My interpretation is the ProbLog interpretation. 
 ;;; The ProbLog reading of these is CAUSAL: If +b ^ +e, this  causes an alarm to be true with probabiility 0.9.
@@ -816,24 +816,25 @@
       :rule-used :rule-1,
       :proving (top-level 1 2 3)
       :rhs-queries ((a ?x)),
-      :decomp [{:prv (a ?x), :proofs [{:rule-used? true,
-                                       :rule-used :rule-2,
-                                       :proving (second-level foo)
-                                       :rhs-queries ((b ?y) (k ?y)),
-                                       :decomp [{:prv (b ?y),
-                                                 :proofs [{:observation-used? true :prvn (b 0)}
-                                                          {:rule-used? true,
-                                                           :rule-used :rule-3,
-                                                           :proving (third-level bar)
-                                                           :rhs-queries ((c ?m)),
-                                                           :decomp [{:prv (c ?m)
-                                                                     :proofs [{:rule-used? true,
-                                                                               :rule-used :rule-4,
-                                                                               :proving (fourth-level baz)
-                                                                               :rhs-queries ((d ?m) (e ?m) (f ?o)),
-                                                                               :decomp [{:prv (d ?m) :proofs [{:observation-used? true, :prvn (d 1)}]}
-                                                                                        {:prv (e ?m) :proofs [{:fact-used?        true, :prvn (e 2)}]}
-                                                                                        {:prv (e ?o) :proofs [{:fact-used?        true, :prvn (f 3)}]}]}]}]}]}]}]}]}]))
+      :decomp [{:prv (a ?x),
+                :proofs [{:rule-used? true,
+                          :rule-used :rule-2,
+                          :proving (second-level foo)
+                          :rhs-queries ((b ?y) (k ?y)),
+                          :decomp [{:prv (b ?y),
+                                    :proofs [{:observation-used? true :prvn (b 0)}
+                                             {:rule-used? true,
+                                              :rule-used :rule-3,
+                                              :proving (third-level bar)
+                                              :rhs-queries ((c ?m)),
+                                              :decomp [{:prv (c ?m)
+                                                        :proofs [{:rule-used? true,
+                                                                  :rule-used :rule-4,
+                                                                  :proving (fourth-level baz)
+                                                                  :rhs-queries ((d ?m) (e ?m) (f ?o)),
+                                                                  :decomp [{:prv (d ?m) :proofs [{:observation-used? true, :prvn (d 1)}]}
+                                                                           {:prv (e ?m) :proofs [{:fact-used?        true, :prvn (e 2)}]}
+                                                                           {:prv (e ?o) :proofs [{:fact-used?        true, :prvn (f 3)}]}]}]}]}]}]}]}]}]))
 
 
 (def tiny

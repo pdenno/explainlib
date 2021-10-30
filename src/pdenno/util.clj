@@ -1,4 +1,6 @@
-(ns pdenno.util)
+(ns pdenno.util
+  (:require
+   [taoensso.timbre              :as log]))
 
 (defn combinations-1
   "Create all combinations of elements from the sets, taking one item from each"
@@ -27,4 +29,12 @@
   "Return a string of n spaces."
   [n]
   (reduce (fn [s _] (str s " ")) "" (range n)))
+
+(defn my-abbreviated-output-fn
+  "I don't want :hostname_ and :timestamp_ in the log output."
+  ([data]       (taoensso.timbre/default-output-fn nil  (dissoc data :hostname_ :timestamp_)))
+  ([opts data]  (taoensso.timbre/default-output-fn opts (dissoc data :hostname_ :timestamp_))))
+
+(log/set-config! (assoc log/*config* :output-fn #'my-abbreviated-output-fn))
+
 

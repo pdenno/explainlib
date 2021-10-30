@@ -1,0 +1,4 @@
+;;; https://github.com/borkdude/clj-kondo/blob/master/doc/config.md
+{:lint-as {mount.core/defstate                          clj-kondo.lint-as/def-catch-all
+           pdenno.explainlib/defkb                      clj-kondo.lint-as/def-catch-all}}
+

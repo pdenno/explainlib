@@ -1,13 +1,11 @@
 (ns pdenno.explainlib
   (:require
    [clojure.core.unify           :as uni]
-   [clojure.data.json            :as json]
    [clojure.math.combinatorics   :as combo]
    [clojure.pprint               :refer (cl-format)]
    [clojure.set                  :as sets]
    [clojure.walk                 :as walk]
    [clojure.spec.alpha           :as s]
-   ;[app.model.env]
    [libpython-clj2.require :refer [require-python]]
    [libpython-clj2.python :as py :refer [py. #_#_py.. py.-]]
    [pdenno.util                  :as util]
@@ -25,7 +23,6 @@
 
 (def diag2 (atom {}))
 (def diag  (atom {}))
-(def diag-kb nil)
 
 ;;; POD ToDo: kb should disallow cycles in rules. 
 (s/def ::neg?    boolean?)
@@ -567,6 +564,7 @@
   (let [lits (->> proof-vecs
                   vals
                   (map :pvec)
+                  ;;(map (fn [stmt] (map #(if (= 'not (first %)) (second %) %) stmt))) ; POD 2021
                   (reduce into #{})
                   (sort compare-lists))]
     (zipmap lits (range 1 (-> lits count inc)))))
@@ -935,12 +933,13 @@
   "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that
    are used as assumptions."
   [kb pvecs]
-  (when-let [elim (not-empty (-> kb :eliminate-assumptions))]
+  (if-let [elim (not-empty (-> kb :eliminate-assumptions))]
     (let [start-count (count pvecs)
           eliminate? (set elim)
           result (remove (fn [pvec] (some #(and (:assumption? %) (eliminate? (-> % :step first))) pvec)) pvecs)]
       (log/info "Removed" (- start-count (count result)) "proofs with assumptions" elim)
-      result)))
+      result)
+    pvecs))
   
 ;;;   The set is winnowed down to the
 ;;;   kb's :elimination-threshold by selectively removing members that contains
@@ -1422,6 +1421,7 @@
   "Produce a map of properties to merge into the kb to adjust it for a game.
    A game is a collection of proof-ids."
   [kb game & {:keys [pretty-analysis?]}]
+  (reset! diag kb)
   (as-> {} ?game-kb
     (assoc ?game-kb :game game)
     (assoc ?game-kb :vars (:vars kb))
@@ -1501,7 +1501,6 @@
    This calls run-games, iteratively splitting the result into winners and losers."
   [kb game-size num-kept final-size & {:keys [loser-fn] :or {loser-fn identity}}]
   (log/info "Tournament:" (-> kb :proof-vecs count) "contestants.")
-  (reset! ngames-played 0)
   (let [loser? (not= loser-fn identity)
         t-result
         (loop [res {:winners (-> kb :proof-vecs keys set)
@@ -1554,6 +1553,7 @@
               final-size 15 ; 20 runs up to 20 seconds. 
               loser-fn identity}}]
   {:pre [(>= game-size 2) (< num-kept game-size)]}
+  (reset! ngames-played 0)
   (if (<= (-> kb :proof-vecs count) max-together)
     (let [game (-> kb :proof-vecs keys)]
       (merge kb (run-one kb game :pretty-analysis? true)))
@@ -1583,6 +1583,7 @@
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
       (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
+      (reset! diag ?kb)
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
       (update ?kb :pclauses       #(into % (inverse-facts ?kb)))
       (update ?kb :pclauses       #(into % (inverse-rules ?kb)))
@@ -1645,7 +1646,7 @@
   (doall (for [fact (->> kb :facts vals (sort-by #(name2num (:id %))))]
            (cl-format stream "~%~5,3f ~9A :: ~A"
                       (:prob fact) (:id fact) (-> fact :cnf first lit2form))))
-  (doall (for [assum (->> (-> kb :assumptions-used) (sort-by #(name2num (:id %))))]
+  (doall (for [assum (->> (-> kb :assumptions-used deref) (sort-by #(name2num (:id %))))]
            (cl-format stream "~%~5,3f ~9A :: ~A"
                       (:prob assum) (:id assum) (-> assum :cnf first lit2form))))
   (cl-format *out* "~{~%~A~}" (:observations kb))
@@ -1660,7 +1661,7 @@
     (do
       (report-problem  kb stream)
       (report-solution kb stream)
-      ;(report-prop-ids kb stream)
+      (report-prop-ids kb stream)
       (report-scores   kb stream)
       (report-kb       kb stream))))
 

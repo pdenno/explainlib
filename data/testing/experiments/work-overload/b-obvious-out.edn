@@ -1,0 +1,61 @@
+{:setup
+ {:title "Work Overload Notebook",
+  :subtitle "mostly meaningful names",
+  :save? true,
+  :tests {:demand {:expect ta/DemandType, :test-of :identifer-concept}, :procTimes {:expect ta/ProcessDurationType, :test-of :identifer-concept}, :nWorkers {:expect ta/WorkerType, :test-of :identifer-concept}}},
+ :explains
+ {:demand
+  {:mpe
+   [{:cost 2918, :proof-id :proof-68, :pvec ((ta/conceptType ta/DemandType demand) (ta/conceptVar ta/DemandType demand) (ta/simMatchVar demand ta/DemandType))}
+    {:cost 2922, :proof-id :proof-89, :pvec ((ta/conceptType ta/DemandType demand) (ta/conceptRefScheme ta/DemandType demand) (ta/simMatchVar demand ta/DemandType) (ta/simMatchVar ProductType ta/ProductType))}
+    {:cost 3357, :proof-id :proof-55, :pvec ((ta/conceptType ta/ProcessDurationType demand) (ta/simMatchVar procTimes ta/ProcessDurationType) (py/traceVar demand procTimes))}
+    {:cost 3357, :proof-id :proof-78, :pvec ((ta/conceptType ta/DemandType demand) (ta/simMatchVar Demand ta/DemandType) (py/traceVar demand Demand))}
+    {:cost 3357, :proof-id :proof-133, :pvec ((ta/conceptType ta/MachineType demand) (ta/simMatchVar Workstation ta/MachineType) (py/traceVar demand Workstation))}
+    {:cost 3357, :proof-id :proof-26, :pvec ((ta/conceptType ta/WorkerType demand) (ta/simMatchVar Workers ta/WorkerType) (py/traceVar demand Workers))}
+    {:cost 3357, :proof-id :proof-122, :pvec ((ta/conceptType ta/MachineType demand) (ta/simMatchVar NumWorkstations ta/MachineType) (py/traceVar demand NumWorkstations))}
+    {:cost 3376, :proof-id :proof-92, :pvec ((ta/conceptType ta/JobType demand) (ta/conceptVar ta/JobType demand) (ta/simMatchVar demand ta/JobType))}
+    {:cost 3447, :proof-id :proof-47, :pvec ((ta/conceptType ta/ProcessDurationType demand) (ta/conceptVar ta/ProcessDurationType demand) (ta/simMatchVar demand ta/ProcessDurationType))}],
+   :loser [:proof-47]},
+  :procTimes
+  {:mpe
+   [{:cost 3044,
+     :proof-id :proof-65,
+     :pvec
+     ((ta/conceptType ta/ProcessDurationType procTimes)
+      (ta/conceptRefScheme ta/ProcessDurationType procTimes)
+      (mz/multiIndexed procTimes ProductType Workstation)
+      (ta/simMatchVar procTimes ta/ProcessDurationType)
+      (ta/simMatchVar ProductType ta/ProductType)
+      (ta/simMatchVar Workstation ta/MachineType))}
+    {:cost 3847,
+     :proof-id :proof-66,
+     :pvec
+     ((ta/conceptType ta/ProcessDurationType procTimes)
+      (ta/conceptRefScheme ta/ProcessDurationType procTimes)
+      (mz/multiIndexed procTimes Workstation ProductType)
+      (ta/simMatchVar procTimes ta/ProcessDurationType)
+      (ta/simMatchVar Workstation ta/ProductType)
+      (ta/simMatchVar ProductType ta/MachineType))}
+    {:cost 3960, :proof-id :proof-44, :pvec ((ta/conceptType ta/ProcessDurationType procTimes) (ta/conceptVar ta/ProcessDurationType procTimes) (ta/simMatchVar procTimes ta/ProcessDurationType))}
+    {:cost 4366, :proof-id :proof-1, :pvec ((ta/conceptType ta/ProductType procTimes) (ta/conceptVar ta/ProductType procTimes) (ta/simMatchVar procTimes ta/ProductType))}
+    {:cost 4399, :proof-id :proof-84, :pvec ((ta/conceptType ta/DemandType procTimes) (ta/simMatchVar demand ta/DemandType) (py/traceVar procTimes demand))}
+    {:cost 4399, :proof-id :proof-26, :pvec ((ta/conceptType ta/WorkerType procTimes) (ta/simMatchVar Workers ta/WorkerType) (py/traceVar procTimes Workers))}
+    {:cost 4399, :proof-id :proof-118, :pvec ((ta/conceptType ta/MachineType procTimes) (ta/simMatchVar NumWorkstations ta/MachineType) (py/traceVar procTimes NumWorkstations))}
+    {:cost 4399, :proof-id :proof-129, :pvec ((ta/conceptType ta/MachineType procTimes) (ta/simMatchVar Workstation ta/MachineType) (py/traceVar procTimes Workstation))}
+    {:cost 4399, :proof-id :proof-77, :pvec ((ta/conceptType ta/DemandType procTimes) (ta/simMatchVar Demand ta/DemandType) (py/traceVar procTimes Demand))}
+    {:cost 4410, :proof-id :proof-67, :pvec ((ta/conceptType ta/DemandType procTimes) (ta/conceptVar ta/DemandType procTimes) (ta/simMatchVar procTimes ta/DemandType))}],
+   :loser [:proof-77]},
+  :nWorkers
+  {:mpe
+   [{:cost 2326, :proof-id :proof-46, :pvec ((ta/conceptType ta/WorkerType nWorkers) (ta/conceptRefScheme ta/WorkerType nWorkers) (ta/simMatchVar nWorkers ta/WorkerType) (ta/simMatchVar Workstation ta/MachineType))}
+    {:cost 2693, :proof-id :proof-23, :pvec ((ta/conceptType ta/WorkerType nWorkers) (ta/conceptVar ta/WorkerType nWorkers) (ta/simMatchVar nWorkers ta/WorkerType))}
+    {:cost 2728, :proof-id :proof-114, :pvec ((ta/conceptType ta/MachineType nWorkers) (ta/conceptVar ta/MachineType nWorkers) (ta/simMatchVar nWorkers ta/MachineType))}
+    {:cost 2761, :proof-id :proof-92, :pvec ((ta/conceptType ta/JobType nWorkers) (ta/conceptVar ta/JobType nWorkers) (ta/simMatchVar nWorkers ta/JobType))}
+    {:cost 2791, :proof-id :proof-47, :pvec ((ta/conceptType ta/ProcessDurationType nWorkers) (ta/conceptVar ta/ProcessDurationType nWorkers) (ta/simMatchVar nWorkers ta/ProcessDurationType))}
+    {:cost 2796, :proof-id :proof-26, :pvec ((ta/conceptType ta/WorkerType nWorkers) (ta/simMatchVar Workers ta/WorkerType) (py/traceVar nWorkers Workers))}
+    {:cost 2796, :proof-id :proof-122, :pvec ((ta/conceptType ta/MachineType nWorkers) (ta/simMatchVar NumWorkstations ta/MachineType) (py/traceVar nWorkers NumWorkstations))}
+    {:cost 2796, :proof-id :proof-85, :pvec ((ta/conceptType ta/DemandType nWorkers) (ta/simMatchVar demand ta/DemandType) (py/traceVar nWorkers demand))}
+    {:cost 2796, :proof-id :proof-133, :pvec ((ta/conceptType ta/MachineType nWorkers) (ta/simMatchVar Workstation ta/MachineType) (py/traceVar nWorkers Workstation))}
+    {:cost 2837, :proof-id :proof-1, :pvec ((ta/conceptType ta/ProductType nWorkers) (ta/conceptVar ta/ProductType nWorkers) (ta/simMatchVar nWorkers ta/ProductType))}
+    {:cost 2895, :proof-id :proof-89, :pvec ((ta/conceptType ta/DemandType nWorkers) (ta/conceptRefScheme ta/DemandType nWorkers) (ta/simMatchVar nWorkers ta/DemandType) (ta/simMatchVar Workstation ta/ProductType))}],
+   :loser [:proof-89]}}}

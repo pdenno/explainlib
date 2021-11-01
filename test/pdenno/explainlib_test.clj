@@ -1,9 +1,11 @@
 (ns pdenno.explainlib-test
   (:require
+   [clojure.core.unify     :as uni]
    [clojure.test           :refer [deftest is testing]]
+   [clojure.set             :as sets]
    [libpython-clj2.require :refer [require-python]]
    [libpython-clj2.python :as py :refer [py. py.. py.-]]
-   [pdenno.explainlib :as explain :refer [defkb explain]]))
+   [pdenno.explainlib :as explain :refer [defkb]]))
 
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
@@ -857,3 +859,66 @@
            (explain/walk-rules small)))
     (is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]
            (explain/walk-rules tiny)))))
+
+;;;-------------- Medium-sized experiments of complete MPE functionality --------
+(defn interesting-loser-fn
+  "Return a function that returns true when the fact argument suggests an interesting loser
+   The argument is a symbol naming a variable.
+   The argument expected-typs is a symbol ta/DemandType, ta/WorkerType, etc.."
+  [id expected-type]
+  (let [type-query (list 'ta/conceptType '?type id)]
+    (fn [proof-vec]
+      {:pre [(and (coll? proof-vec) (-> proof-vec first first symbol?))]}
+      (when-let [type (some #(when-let [binds (uni/unify type-query %)]
+                               (get binds '?type))
+                            proof-vec)]
+        (not= type expected-type)))))
+
+(defn explain-concept-of-id
+  "explain/explain the given ID in the notebook."
+  [id-key kb+setup]
+  (let [id-sym (-> id-key name symbol)
+        expect (-> kb+setup :setup :tests id-key :expect)
+        loser (interesting-loser-fn id-sym expect)
+        {:keys [mpe loser]}
+        (explain/explain (seq (list 'ta/conceptQuery id-sym))
+                         (:kb kb+setup)
+                         :loser-fn loser)]
+    {:mpe mpe :loser loser}))
+
+(defn run-experiment
+  "Like run experiment, but doesn't need jupyter because it is reading saved data from the NB analysis"
+  [epath]
+  (let [result
+        (as-> (-> epath slurp  read-string) ?exp
+          (update-in ?exp [:kb :assumptions-used] atom)
+          (assoc-in ?exp [:kb :vars]
+                    {:cost-fn      pdenno.explainlib/neg-log-cost
+                     :inv-cost-fn  pdenno.explainlib/neg-log-cost-1
+                     :assumption-count (atom 0)
+                     :pclause-count (atom 0)
+                     :num-skolems (atom 0)})
+          (assoc  ?exp :explains
+                  (reduce-kv (fn [res term-tested _]
+                               (assoc res term-tested (explain-concept-of-id term-tested ?exp)))
+                             {}
+                             (-> ?exp :setup :tests)))
+          (update ?exp :setup #(dissoc % :ns-path :notebook))
+          (dissoc ?exp :kb :evidence))]
+    result))
+
+(deftest bautista-obvious
+  (testing "medium-sized MPE calculation."
+    (let [results (->> "data/testing/experiments/work-overload/b-obvious-in.edn"
+                       run-experiment
+                       :explains
+                       :demand
+                       :mpe
+                       (map :proof-id)
+                       set)]
+      ;; Owing to the randomness of tournaments, and small game size, it is possible that not all of the returned top proofs
+      ;; are identical for each run. Almost always, however, the first few are identical
+      (is (>= (count (sets/intersection
+                      results
+                      #{:proof-46 :proof-47 :proof-89 :proof-55 :proof-133 :proof-78 :proof-68 :proof-114 :proof-92 :proof-26 :proof-69 :proof-122}))
+              6)))))

@@ -564,7 +564,6 @@
   (let [lits (->> proof-vecs
                   vals
                   (map :pvec)
-                  ;;(map (fn [stmt] (map #(if (= 'not (first %)) (second %) %) stmt))) ; POD 2021
                   (reduce into #{})
                   (sort compare-lists))]
     (zipmap lits (range 1 (-> lits count inc)))))
@@ -700,20 +699,17 @@
 (defn python-maxsat
   "Query any active app-gateway to run an RC2 MAXSAT problem. Return the :result."
   [{:keys [wdimacs z-vars prop-ids proof-vecs]}]
-  (let [prom (promise) ; POD NYI
-        results (try
-                  (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40)
-                  (catch Throwable _ (log/error "Problem running MAXSAT.")))
-        z-set (set (into z-vars (map - z-vars)))]
-    (when (and (not (#{:maxsat-timeout :maxsat-failed} results)) (not-empty results))
-      ;; POD NYI (the following)
-      (reset! diag results)
+  (try
+    (let [prom (promise) ; POD NYI
+          results (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40)
+          z-set (set (into z-vars (map - z-vars)))]
       (mapv (fn [indv]
               (as-> indv ?i
                 (assoc ?i :proof-id (model2proof-id (remove #(z-set %) (:model indv)) prop-ids proof-vecs))
                 (assoc ?i :pvec (-> (get proof-vecs (:proof-id ?i)) :pvec))
                 (dissoc ?i :model)))
-            results))))
+            results))
+    (catch Throwable _ (log/error "Problem running MAXSAT."))))
 
 (defn pclause2pid-vec
   "Return a vector of the proposition ids for the given pclause."
@@ -930,6 +926,17 @@
                    proofs))))
 
 (defn winnow-regardless
+  "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that
+   are used as assumptions."
+  [kb pvecs]
+  (when-let [elim (not-empty (-> kb :eliminate-assumptions))]
+    (let [start-count (count pvecs)
+          eliminate? (set elim)
+          result (remove (fn [pvec] (some #(and (:assumption? %) (eliminate? (-> % :step first))) pvec)) pvecs)]
+      (log/info "Removed" (- start-count (count result)) "proofs with assumptions" elim)
+      result)))
+
+#_(defn winnow-regardless
   "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that
    are used as assumptions."
   [kb pvecs]
@@ -1583,7 +1590,6 @@
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
       (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
-      (reset! diag ?kb)
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
       (update ?kb :pclauses       #(into % (inverse-facts ?kb)))
       (update ?kb :pclauses       #(into % (inverse-rules ?kb)))
@@ -1701,10 +1707,3 @@
               (range run-times))
       (update :in-final frequencies)
       (update :won frequencies)))
-
-;;; Temporary testing stuff
-;;;(report-results (explain-observation '(alarm plaza) test/alarm-kb))
-;;;(report-results (explain-observation '(blocked-road plaza) test/blocked-road-kb))
-;;;(report-results (explain-observation '(groupby Table-1 COLA COLB) test/job-kb))
-;;;(report-results (explain-observation '(objectiveFnVal CostTable) rule/r1))
-;;;(report-results (explain-observation '(objectiveFnVal ActualEffort) rule/r1))

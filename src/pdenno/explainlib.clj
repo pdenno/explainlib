@@ -14,6 +14,12 @@
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
+;;; POD ToDo: (0) Put :pc/id and ":pc/prob" in the rule and dissoc :rule/head :rule/tail, making it an ordinary pclause.
+;;;               Note that rule IFF (> (count literals) 1). 
+;;;           (1) rules should have namespace qualified keys.
+;;;           (2) games should have namespace qualified keys.
+;;;           (3) kb should disallow cycles in rules.
+
 (def maxsat-timeout 20000) ; 20 seconds!
 (def num-skolems (atom 0))
 
@@ -21,40 +27,8 @@
 (defn logical?   [x] (-> x meta :logical?))
 (defn skolem?    [x] (-> x meta :skolem?))
 
-(def diag2 (atom {}))
-(def diag  (atom {}))
-
-;;; POD ToDo: kb should disallow cycles in rules. 
-(s/def ::neg?    boolean?)
-(s/def ::pred    (s/and seq? #(-> % first symbol?) #(>= (count %) 2)))
-(s/def ::literal (s/keys :req-un [::pred ::neg?]))
-(s/def ::clause  (s/and vector? (s/coll-of ::literal)))
-;;; BTW, the empty clause is false. (It is the identity in the monoid ({T,F} V).) 
-(s/def ::non-empty-clause  (s/and vector? (s/coll-of ::literal :min-size 1))) 
-(s/def ::horn-clause     (s/and ::non-empty-clause #(<= (->> % (remove :neg?) count) 1)))
-(s/def ::definite-clause (s/and ::non-empty-clause #(== (->> % (remove :neg?) count) 1)))
-(s/def ::falsifiable     (s/and #(s/valid? ::non-empty-clause (:cnf %))
-                                 (s/keys ::req-un [:cnf]) ; recalled-facts (from proofs) are like this.
-                                #(== (-> % :cnf count) 1)))
-
-;; POD Non-positional CNF will need some thought. See defn hard-clauses
-(s/def ::fact        (s/and ::falsifiable #(-> % :cnf first :neg? false?))) 
-(s/def ::ground-fact (s/and ::fact (fn [f] (not-any? #(cvar? %) (-> f :cnf first :pred)))))
-(s/def ::observation ::ground-fact)
-(s/def ::assumption  ::ground-fact)
-(s/def ::head    ::pred)
-(s/def ::tail    (s/and vector? (s/coll-of ::pred :min-count 1)))
-(s/def ::prob    (s/double-in :min 0.0 :max 1.0))
-(s/def ::id      keyword?)
-(s/def ::rule    (s/and (s/keys ::req-un [::head ::tail ::prob ::id])
-                        #(s/valid? ::horn-clause (:cnf %))))
-(s/def ::pclause (s/or :typical (s/keys ::req-un [::cnf ::prob])
-                       :empty  #(-> % :cnf empty?)))
-(s/def ::bindings (s/and map? #(every? cvar? (keys %))))
-(s/def ::binding-stack (s/and vector? (s/coll-of ::bindings :min-count 0)))
-
 (defn varize
-  "Add :var? metadata to variables of obj."
+  "Add :cvar? = true metadata to variables of obj."
   ([obj] (varize obj ""))
   ([obj suffix]
    (walk/postwalk (fn [x]
@@ -65,6 +39,128 @@
                           :else
                           x))
                   obj)))
+
+(def diag2 (atom {}))
+(def diag  (atom {}))
+
+;;; See specs, but roughly:
+;;;  pc/pclause  is   {:pc/cnf [{:lit/pred (foo ?bar) :lit/neg? false} ...] :pc/prob <num> :pc/id <kword>}
+;;; "log/literal is  {:lit/pred (foo ?bar) :lit/neg? false}.
+;;; "pred"       is  (foo ?bar) or (not (foo ?bar)).
+(defn rule-name? [n] (and (keyword? n) (re-matches  #"rule-\d+(-inv)?" (name n))))
+(defn fact-name? [n] (and (keyword? n) (re-matches  #"fact-\d+(-inv)?" (name n))))
+(defn assm-name? [n] (and (keyword? n) (re-matches #"assum-\d+(-inv)?" (name n))))
+
+(s/def :log/ground-fact (s/and seq? (fn [f] (not-any? #(cvar? %) f))))
+(s/def :log/pos-pred (s/and seq? #(-> % first symbol?) #(>= (count %) 2)))
+(s/def :log/neg-pred (s/and seq? #(= 'not (first %)) #(and (seq? (second %)) (>= (-> % second count) 2))))
+(s/def :log/pred (s/or :positive :log/pos-pred
+                       :negative :log/neg-pred))
+(s/def :app/probability (s/double-in :min 0.0 :max 1.0))
+
+
+(s/def :lit/neg?  boolean?)
+(s/def :lit/pred :log/pos-pred)
+
+;;; log(ical) are types of the properties of facts, observations, rules, and pclauses (things manipulated).
+;;; A literal is an atomic formula (atom) or its negation. POD Do I really need empty clauses?
+(s/def :log/literal (s/keys :req [:lit/pred :lit/neg?]))
+(s/def :log/clause            (s/and vector? (s/coll-of :log/literal)))
+;;; BTW, the empty clause is false. (It is the identity in the monoid ({T,F} V).) 
+(s/def :log/non-empty-clause  (s/and vector? (s/coll-of :log/literal :min-size 1))) 
+(s/def :log/horn-clause       (s/and :log/non-empty-clause #(<= (->> % (remove :lit/neg?) count) 1)))
+(s/def :log/definite-clause   (s/and :log/non-empty-clause #(== (->> % (remove :lit/neg?) count) 1)))
+(s/def :log/falsifiable       (s/and #(s/valid? :log/non-empty-clause (:pc/cnf %))
+                                      ;(s/keys :req [:pc/cnf]) ; recalled-facts (from proofs) are like this. Covered by non-empty-clause
+                                     #(== (-> % :pc/cnf count) 1)))
+
+(s/def :pc/id keyword?) ; Give a sense of its origin, e.g., :fact-1. 
+(s/def :pc/prob :app/probability)
+(s/def :pc/cnf :log/clause)
+(s/def :pc/pclause (s/or :typical (s/keys :req [:pc/cnf :pc/prob :pc/id])
+                         :empty  #(-> % :pc/cnf empty?)))
+
+;;; s/and passes the result to the next test. If there's an s/or, next gets [:s-key obj]. Thus second here.
+(s/def :app/rule       (s/and :pc/pclause #(s/valid? :log/horn-clause (-> % second :pc/cnf)) #(rule-name? (:pc/id %))))
+(s/def :app/fact       (s/and :pc/pclause #(== 1 (-> % second :pc/cnf count))                #(fact-name? (:pc/id %))))
+(s/def :app/assumption (s/and :pc/pclause #(== 1 (-> % second :pc/cnf count))                #(assm-name? (:pc/id %))))
+(s/def :app/observation :log/ground-fact) ; This one is not probabilistic.
+
+(s/def :app/query :log/pos-pred)
+(s/def :app/rules (s/coll-of :app/rule))
+(s/def :app/facts (s/coll-of :app/fact))
+(s/def :app/kb (s/keys :req [:app/query :app/rules :app/facts])) ; POD more here, especially when elim atoms.
+
+(s/def ::bindings (s/and map? #(every? cvar? (keys %))))                    
+(s/def ::binding-stack (s/and vector? (s/coll-of ::bindings :min-count 0))) ; POD not used?
+
+(def blocked-road-proof
+  (varize
+   '{:pf/prv (blocked-road plaza),
+     :pf/top? true,
+     :pf/caller {:pf/bindings {}},
+     :pf/proofs
+     [{:pf/rule-used? true,
+       :pf/rule-used :rule-1,
+       :pf/proving (blocked-road plaza),
+       :pf/rhs-queries {:pf/rhs ((heavy-snow plaza) (drive-hazard plaza)),
+                        :pf/bindings {?loc-r1 plaza, ?x-f2 plaza}},
+       :pf/decomp
+       [{:pf/prv (heavy-snow plaza),
+         :pf/caller {:pf/rule-id :rule-1,
+                     :pf/sol (heavy-snow plaza),
+                     :pf/bindings {?loc-r1 plaza}},
+         :pf/:proofs [{:prvn (heavy-snow plaza),
+                       :fact-used? true}]}
+        {:pf/prv (drive-hazard plaza),
+         :pf/caller {:pf/rule-id
+                     :rule-1,
+                     :pf/sol (drive-hazard plaza),
+                     :pf/bindings {?loc-r1 plaza}},
+         :pf/proofs [{:pf/prvn (drive-hazard plaza),
+                      :pf/bindings {?x-f2 plaza},
+                      :pf/fact-used? true}]}]}
+      
+      {:pf/rule-used? true,
+       :pf/rule-used :rule-2,
+       :pf/proving (blocked-road plaza),
+       :pf/rhs-queries {:pf/rhs ((accident plaza) (clearing-wreck ?crew-r2 plaza)), :pf/bindings {?loc-r2 plaza, ?x-f3 plaza, ?crew-r2 ?x-f4, ?y-f4 plaza}},
+       :pf/decomp
+       [{:pf/prv (accident plaza),
+         :pf/caller {:pf/rule-id :rule-2,
+                     :pf/sol (accident plaza),
+                     :pf/bindings {?loc-r2 plaza}},
+         :pf/proofs [{:pf/prvn (accident plaza), :pf/bindings {?x-f3 plaza}, :pf/fact-used? true}]}
+        {:prv (clearing-wreck ?crew-r2 plaza),
+         :pf/caller {:pf/rule-id :rule-2,
+                     :pf/sol (clearing-wreck ?crew-r2 plaza),
+                     :pf/bindings {?loc-r2 plaza, ?x-f3 plaza}},
+         :pf/proofs [{:pf/prvn (clearing-wreck ?x-f4 plaza), :pf/bindings {?crew-r2 ?x-f4, ?y-f4 plaza}, :pf/fact-used? true}]}]}]}))
+  
+(s/def :pf/prv    (s/keys :req [:pf/caller]))
+(s/def :pf/proof  (s/and not-empty (s/keys :req [:pf/prv])))
+
+(s/def :pf/proving :log/ground-fact) ; POD ground?
+(s/def :pf/rule-used? boolean?)
+(s/def :pf/fact-used? boolean?)
+(s/def :pf/assumption-used? boolean?)
+(s/def :pf/sol :log/ground-fact)
+
+(s/def :pf/proof-body
+  (s/and (s/keys :req [:pf/proving])
+         #(== 1 (-> (sets/intersection #{:pf/rule-used? :pf/fact-used? :pf/assumption-used?} (-> % keys set)) count))
+         (s/or :rule-used (s/keys :req [:pf/rule-used? :pf/rhs-queries :pf/sol :pf/decomp])
+               :fact-used (s/keys :req [:pf/fact-used? :pf/prvn] :opt [:pf/bindings])
+               :assm-used (s/keys :req [:pf/assumption-used? :pf/prvn] :opt [:pf/bindings]))))
+
+(s/def :pf/bindings (s/and map? #(every? cvar? (keys %)) #(every? (fn [x] (or (symbol? x) (number? x) (string? x))) (vals %))))
+(s/def :pf/rule-id rule-name?)
+(s/def :pf/prv    ::pos-pred)
+(s/def :pf/caller (s/keys :req [:pf/rule-id :pf/sol :pf/bindings] :opt [:pf/rule-id :pf/sol]))
+(s/def :pf/proofs (s/and vector? (s/coll-of :pf/proof-body)))
+(s/def :pf/proof-decomp (s/keys :req [:pf/prv :pf/caller :pf/proofs]))
+(s/def :pf/decomp (s/coll-of :pf/proof-decomp))
+(s/def :app/proof (s/keys :req [:pf/prv :pf/caller :pf/proofs] :opt [:pf/top?]))
 
 (defn collect-vars
   "Return a set of all the vars in a argument form"
@@ -88,36 +184,36 @@
 (defn comp-lit
   "Complement the argument literal."
   [lit]
-  (update lit :neg? not))
+  (update lit :lit/neg? not))
 
 (defn comp-lits?
   "Return true if the two literals are complements."
   [lit1 lit2]
-  (and (uni/unify (:pred lit1) (:pred lit2))
-       (not= (:neg? lit1) (:neg? lit2))))
+  (and (uni/unify (:lit/pred lit1) (:lit/pred lit2))
+       (not= (:lit/neg? lit1) (:lit/neg? lit2))))
 
 (defn form2lit
   "Return a literal. It looks like {:pred (some form) :neg? true|false}.
    Handles only predicates and negated predicates."
   [form]
   (if (= (first form) 'not)
-    {:pred (-> form second varize) :neg? true}
-    {:pred (varize form) :neg? false}))
+    {:lit/pred (-> form second varize) :lit/neg? true}
+    {:lit/pred (varize form) :lit/neg? false}))
 
 (defn lit2form
   "Return the literal list form for the argument literal map."
   [lit]
   (varize
-   (if (:neg? lit)
-     (list 'not (:pred lit))
-     (:pred lit))))
+   (if (:lit/neg? lit)
+     (list 'not (:lit/pred lit))
+     (:lit/pred lit))))
 
-(defn rule2cnf ; This ought to be called rule2horn! 
+(defn rule-horn
   "Return the CNF corresponding to the rule, a vector of literal MAPS."
-  [rule]
-  (reset! diag rule)
-  (into (vector (form2lit (:head rule)))
-        (mapv #(-> % form2lit comp-lit) (:tail rule))))
+  [head tail suffix]
+  (into 
+   (vector (-> head (varize suffix) form2lit))
+   (mapv #(-> % (varize suffix) form2lit comp-lit) tail)))
 
 ;;; This if not negating pclause in MAX-SAT.
 (defn neg-log-cost
@@ -154,10 +250,10 @@
          vars (collect-vars pred)
          subs (zipmap vars (map #(skol-var kb %) vars))]
      {:form
-       (lit2form {:pred (uni/subst pred subs) :neg? neg?})
+       (lit2form {:lit/pred (uni/subst pred subs) :lit/neg? neg?})
       :subs subs})))
 
-(defn invert-clause
+(defn invert-cnf
   "Return the clause with first literal complemented."
   [clause]
   (into (-> clause first comp-lit vector)
@@ -165,16 +261,15 @@
 
 (defn invert-lit
   [lit]
-  (update lit :neg? not))
+  (update lit :lit/neg? not))
 
 (defn invert-rule
   "Return the clause with first literal complemented. Doesn't varize"
   [rule]
   (-> rule
-      (update :cnf  #(invert-clause %)) ; POD ugly method!
-      (update :prob #(- 1.0 %))
-      (update :id   #(-> % name (str "i") keyword))
-      (update :head #(-> % form2lit comp-lit lit2form))))
+      (update :pc/cnf  #(invert-cnf %))
+      (update :pc/prob #(- 1.0 %))
+      (update :pc/id   #(-> % name (str "-i") keyword))))
 
 (defn name2suffix
   "Return a suffix good for use with the argument name (a keyword)"
@@ -182,67 +277,70 @@
   (let [[_ let num] (re-matches #"^(\w)\w+\-(\d+)$" (name id))]
     (str "-" let num)))
 
-(defn warn-rule-rhs-ordering
-  "Rule RHSs are currently bound in the order they appear.
-   Things can get goofed up if the 'data' ones are executed first, since
+;;; POD Do I even use these?
+(defn head [rule] (-> rule :cnf first))
+(defn tail [rule] (-> rule :cnf rest vec))
+
+;;; (sort-rule-rhs '[[lhs ?x] [x ?x] [p1 ?x] [y ?x] [p2 ?x]] '#{p1 p2}) ==> [[lhs ?x] [p1 ?x] [p2 ?x] [x ?x] [y ?x]]
+(defn sort-rule-rhs
+  "Rule RHSs are in whatever order the user typed them. 
+   Things can get goofed up if the 'data' ones are not executed first, since
    useful data binding will be shadowed by an arbitrary rule RHS binding.
-   This issues warnings for where data isn't first. Returns the argument."
-  [rules]
-  (let [rs (vals rules)
-        lhs-sym? (->> rs (map :head) (map first) set)
-        #_data #_(->> rs (mapcat :tail) (map first) (remove #(lhs-sym? %)))]
-    (doseq [rule rs]
-      (let [rhs  (map #(-> {:pos %1} (assoc :lhs-sym? (lhs-sym? %2)))
-                      (range (count (:tail rule)))
-                      (map first (:tail rule)))
-            first-data-pos (as-> rhs ?pos
-                             (remove :lhs-sym? ?pos)
-                             (when (not-empty ?pos) (apply min (map :pos ?pos))))]
-        (when (some #(and first-data-pos (< (:pos %) first-data-pos)) rhs)
-          (log/warn "Rule" (:id rule) "has rule-rhs before rule data.")))))
-  rules)
+   This returns updated CNF. The args are:
+      data-preds - a set of predicates that you don't expect to be resolved by data.
+      cnf - CNF of the rule; it will be returned resorted."
+  [cnf data?]
+  (let [head (first cnf)
+        tail (rest cnf)]
+    (into (vector head)
+          (sort-by first
+                   #(cond (and (data? %1) (data? %2)) 0
+                          (data? %1) -1
+                          (data? %2)  1
+                          :else 0)
+                   tail))))
 
 (defn finalize-rules
-  "Augment the argument vector of rules with additional properties, 
-   returning a map indexed by a sequential name given to each rule."
+  "Turn rules in to pclauses, sorting RHS so data is first."
   [rules]
-  (-> (reduce-kv (fn [rs k v] 
-                   (let [suffix (name2suffix k)
-                         rule (as-> v ?r
-                                (assoc  ?r :id   k)
-                                (update ?r :head #(varize % suffix))
-                                (update ?r :tail #(varize % suffix))
-                                (assoc  ?r :cnf   (rule2cnf ?r)))]
-                     (s/valid? ::rule rule)
-                     (assoc rs (:id rule) rule)))
-                 {}
-                 (zipmap (map #(-> (str "rule-" %) keyword) (range 1 (-> rules count inc)))
-                         rules))
-      warn-rule-rhs-ordering))
+  (let [head-pred? (set (map #(-> % :head first) rules))
+        tail-preds (reduce into #{} (map (fn [t] (map first t)) (map :tail rules)))
+        data? (reduce (fn [res p] (if (head-pred? p) res (conj res p))) #{} tail-preds)]
+    (reduce-kv (fn [res k v] 
+                 (let [suffix (name2suffix k)
+                       rule (-> {} 
+                                (assoc :pc/id   k)
+                                (assoc :pc/cnf (-> (rule-horn (:head v) (:tail v) suffix) (sort-rule-rhs data?)))
+                                (assoc :pc/prob (:prob v)))]
+                   (s/assert :app/rule rule)
+                   (assoc res (:pc/id rule) rule)))
+               {}
+               (zipmap (map #(-> (str "rule-" %) keyword) (range 1 (-> rules count inc)))
+                       rules))))
 
 (defn finalize-facts
-  "Augment the argument vector of fact with additional properties, 
-   returning a map indexed by a sequential name given to each rule."
+  "Turn facts into pclauses."
   [facts]
   (reduce-kv (fn [fs k v]
                (let [suffix   (name2suffix k)
-                     fact (-> v 
-                              (assoc  :id  k)
-                              (assoc  :cnf (-> v :fact form2lit vector))
-                              (update :cnf #(varize % suffix))
-                              (dissoc :fact))]
-                 (s/valid? ::fact fact)
-                 (-> fs
-                     (assoc k fact))))
+                     fact (-> {} 
+                              (assoc  :pc/id  k)
+                              (assoc  :pc/cnf (-> v :fact form2lit vector))
+                              (update :pc/cnf #(varize % suffix))
+                              (assoc  :pc/prob (:prob v)))]
+                 (s/assert :app/fact fact)
+                 (assoc fs (:pc/id fact) fact)))
              {}
              (zipmap (map #(-> (str "fact-" %) keyword) (range 1 (-> facts count inc)))
                      facts)))
 
 (defn finalize-kb [kb query]
-  (as-> kb ?kb
-    (assoc  ?kb :query query)
-    (update ?kb :rules finalize-rules)
-    (update ?kb :facts finalize-facts)))
+  (let [res (as-> kb ?kb
+              (assoc  ?kb :app/query query)
+              (update ?kb :app/rules finalize-rules)
+              (update ?kb :app/facts finalize-facts))]
+    (s/assert :app/kb res) ; POD duplicate effort in finalize-X. 
+    res))
 
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
@@ -257,44 +355,45 @@
                               elimination-priority []
                               cost-fn     neg-log-cost
                               inv-cost-fn neg-log-cost-1}}]
-  `(do
-     (def ~name (identity  {:vars {:assumption-count (atom 0)
-                                   :pclause-count (atom 0)
-                                   :num-skolems (atom 0)
-                                   :cost-fn ~cost-fn,
-                                   :inv-cost-fn ~inv-cost-fn}
-                            :rules '~rules
-                            :facts '~facts
-                            :assumptions-used (atom {})
-                            :observations '~observations
-                            :eliminate-assumptions '~eliminate-assumptions
-                            :elimination-threshold ~elimination-threshold
-                            :elimination-priority '~elimination-priority}))))
+  `(def ~name (identity  {:app/vars {:assumption-count (atom 0)
+                                     :pclause-count (atom 0)
+                                     :num-skolems (atom 0)
+                                     :cost-fn ~cost-fn,
+                                     :inv-cost-fn ~inv-cost-fn}
+                          :app/rules '~rules
+                          :app/facts '~facts
+                          :app/assumptions-used (atom {})
+                          :app/observations '~observations
+                          :app/eliminate-assumptions '~eliminate-assumptions
+                          :app/elimination-threshold ~elimination-threshold
+                          :app/elimination-priority '~elimination-priority})))
 
 (defn merge-kbs
   "Return a KB which is the union of the argument KBs."
   [& kbs]
-  (-> (reduce (fn [kb other-kb]
-                (-> kb
-                    (update :rules        #(-> % (into (:rules        other-kb)) distinct vec))
-                    (update :facts        #(-> % (into (:facts        other-kb)) distinct vec))
-                    (update :observations #(-> % (into (:observations other-kb)) distinct vec))))
-              {:rules [] :facts [] :observations []}
-              kbs)
-      (assoc-in [:vars :cost-fn] neg-log-cost)))
+  (let [res (-> (reduce (fn [kb other-kb]
+                          (-> kb
+                              (update :app/rules        #(-> % (into (:app/rules        other-kb)) distinct vec))
+                              (update :app/facts        #(-> % (into (:app/facts        other-kb)) distinct vec))
+                              (update :app/observations #(-> % (into (:app/observations other-kb)) distinct vec))))
+                        {:app/rules [] :app/facts [] :app/observations []}
+                        kbs)
+                (assoc-in [:app/vars :app/cost-fn] neg-log-cost))]
+    (s/valid? :app/kb res)
+    res))
 
 (defn add-facts
   [kb & facts]
-    (update kb :facts
+    (update kb :app/facts
           into
           (->> facts
                (reduce into)
                distinct
-               (sort #(> (:prob %1) (:prob %2))))))
+               (sort #(> (:pc/prob %1) (:pc/prob %2))))))
 
 (defn add-observations
   [kb & obs]
-  (update kb :observations
+  (update kb :app/observations
           into
           (->> obs
                (reduce into)
@@ -307,27 +406,27 @@
   [kb]
   (reset-scope-stack)
   (reset! diag2 {})
-  (reset! (:assumptions-used kb) {})
-  (reset! (-> kb :vars :assumption-count) 0)
-  (reset! (-> kb :vars :pclause-count) 0)
-  (reset! (-> kb :vars :num-skolems) 0)
+  (reset! (:app/assumptions-used kb) {})
+  (reset! (-> kb :app/vars :assumption-count) 0)
+  (reset! (-> kb :app/vars :pclause-count) 0)
+  (reset! (-> kb :app/vars :num-skolems) 0)
   (-> kb
       (dissoc :raw-proofs :cnf-proofs :pclauses)))
 
 (defn pred=
   "Return true if the predicate symbols match."
   [lit1 lit2]
-  (= (-> lit1 :pred first)
-     (-> lit2 :pred first)))
+  (= (-> lit1 :lit/pred first)
+     (-> lit2 :lit/pred first)))
 
 (defn sign=
   [lit1 lit2]
-  (= (:neg? lit1) (:neg? lit2)))
+  (= (:lit/neg? lit1) (:lit/neg? lit2)))
 
 (defn pred-names-a-rule?
   "Pred syms that name rules are not intended to be assumptions."
   [pred-sym kb]
-  (let [head-syms (->> kb :rules vals (map :head) (map first) distinct)]
+  (let [head-syms (->> kb :app/rules vals :pc/cnf (map first) (map first) distinct)]
     (some #(= pred-sym %) head-syms)))
 
 ;;; POD KB is now an arg to assumption-prob. Get rid of these!
@@ -346,7 +445,7 @@
   [pred-sym kb]
   (cond (not-yet-implemented? pred-sym)               0.001  ;default-black-list-probability     
         (black-list-pred? pred-sym)                   0.001  ;default-black-list-probability     
-        (requires-evidence? pred-sym)                 0.01  ;default-similarity-assumption-probability ; 0.001
+        (requires-evidence? pred-sym)                 0.01   ;default-similarity-assumption-probability ; 0.001
         (pred-names-a-rule? pred-sym kb)              0.001
         :else                                         0.400))  
 
@@ -364,18 +463,18 @@
                 (assoc :prob 1.0)
                 (assoc :comment (cl-format nil "OB ~A" (:step step))))
           (:fact? step) ; POD no negative facts. 
-          (let [fact (some #(when (uni/unify  ground-atom (-> % :cnf first :pred)) %) facts)]
+          (let [fact (some #(when (uni/unify  ground-atom (-> % :pc/cnf first :lit/pred)) %) facts)]
             ;#p fact
             (-> fact
                 (assoc :fact? true)
-                (assoc :cnf (vector {:pred ground-atom :neg? false})) ; want the ground atom
+                (assoc :cnf (vector {:lit/pred ground-atom :lit/neg? false})) ; want the ground atom
                 (assoc :using-proof (:using-proof ?pc))
                 (assoc :comment (cl-format nil "~A" ground-atom))))
           (:assumption? step)
           (-> ?pc
               (assoc :assumption? true)
               (assoc :prob (assumption-prob (first ground-atom) kb))
-              (assoc :cnf (vector {:pred ground-atom :neg? false}))
+              (assoc :cnf (vector {:lit/pred ground-atom :lit/neg? false}))
               (assoc :comment (cl-format nil "~A" ground-atom)))))))
 
 (defn pclauses-for-rule
@@ -383,9 +482,9 @@
     (1) a pclauses for the rule, showing all bindings used and the proof from which it is being derived
     (2) the pvec with the head and non-rule steps consumed removed."
   [kb steps proof-id]
-  (let [heads (->> kb :rules vals (map :head))
+  (let [heads (->> kb :app/rules vals (map #(-> % :pc/cnf first)))
         rule-id (-> steps first :rule-id)
-        rule (-> kb :rules rule-id)
+        rule (-> kb :app/rules rule-id)
         rule-preds (into (vector (:head rule)) (:tail rule))
         ;; POD This isn't perfect (mutually recursive rules might screw it up), but I'm avoiding those.
         ground-atoms (reduce (fn [res rule-pred]
@@ -401,7 +500,7 @@
                          (assoc :bindings bindings) ; POD I don't know that it is useful, but bindings have been such a problem...
                          (dissoc :head :tail :id)
                          (assoc :from-rule rule-id)
-                         (update :cnf (fn [cnf] (mapv (fn [term] (update term :pred #(uni/subst % bindings))) cnf)))
+                         (update :cnf (fn [cnf] (mapv (fn [term] (update term :lit/pred #(uni/subst % bindings))) cnf)))
                          (assoc :comment (str rule-id " "  bindings  " " (uni/subst (:head rule) bindings))))
         non-rule-steps-used (reduce (fn [res g-rhs]
                                       (conj res (some #(when (= g-rhs (:step %)) %) steps)))
@@ -446,7 +545,7 @@
         pclauses-by-cnf
         (as-> (-> kb :proof-vecs vals) ?p
           (mapcat #(collect-from-pvec kb %) ?p)
-          (group-by :cnf ?p) ; No :cnf on observations. They all go to nil, which is okay.
+          (group-by :pc/cnf ?p) ; No :cnf on observations. They all go to nil, which is okay.
           (dissoc ?p nil))]
     (->> (reduce-kv (fn [res _ clauses]
                       (let [used-in (-> (map :using-proof clauses) set)]
@@ -466,7 +565,7 @@
   [pclause observation-lits]
   (let [used-ev (atom [])]
     (as-> pclause ?pc
-      (update ?pc :cnf (fn [cnf]
+      (update ?pc :pc/cnf (fn [cnf]
                          (reduce (fn [c lit]
                                    (if-let [e (some #(when (comp-lits? lit %) %) observation-lits)]
                                      (do (swap! used-ev conj e)
@@ -474,9 +573,9 @@
                                      (conj c lit)))
                                  []
                                  cnf)))
-      (update ?pc :comment #(cl-format nil "~A~{ | REDU ~A~}" % (map lit2form @used-ev)))
-      (assoc  ?pc :remove? (-> ?pc :cnf empty?))
-      (s/assert ::pclause ?pc))))
+      (update ?pc :pc/comment #(cl-format nil "~A~{ | REDU ~A~}" % (map lit2form @used-ev)))
+      (assoc  ?pc :pc/remove? (-> ?pc :cnf empty?))
+      (s/assert :pc/pclause ?pc))))
 
 ;;; Questionable to use unique-clauses above because
 ;;;  (1) I don't see why the same clause arrived at through different means might still be applied.
@@ -487,9 +586,9 @@
   "Return a vector of maps {:prob <probability> :cnf <clause> corresponding
    to the clauses used in the proofs and their complements reduced by the evidence."
   [kb]
-  (let [observations (conj (conj (:observations kb)
-                                 (:query kb))
-                           (list 'not (:query kb)))]
+  (let [observations (conj (conj (:app/observations kb)
+                                 (:app/query kb))
+                           (list 'not (:app/query kb)))]
     (->> (:pclauses kb)
          (remove :remove?)
          (mapv #(reduce-pclause % (map form2lit observations)))
@@ -524,37 +623,37 @@
               (< (typen x) (typen y)) -1, ; facts, assumptions then rules
               (< (typen y) (typen x))  1,
               (and (< (typen x) 3) (<  (typen y) 3))
-              (if (== (-> x :cnf first :pos) (-> y :cnf first :pos)) ; same fact/assum...
-                (if (-> x :cnf first :neg?) +1 -1)                   ; ...positive first
-                (if (< (-> x :cnf first :pos) (-> y :cnf first :pos)) -1 +1)), ; ...lower :pos facts first.
+              (if (== (-> x :pc/cnf first :prop/id) (-> y :pc/cnf first :prop/id)) ; same fact/assum...
+                (if (-> x :pc/cnf first :lit/neg?) +1 -1)                   ; ...positive first
+                (if (< (-> x :pc/cnf first :prop/id) (-> y :pc/cnf first :prop/id)) -1 +1)), ; ...lower :prop/id facts first.
               :else ; complex clauses: clause with lowest min pos fact.
-              (let [min-x (apply min (->> x :cnf (map :pos)))
-                    min-y (apply min (->> y :cnf (map :pos)))]
+              (let [min-x (apply min (->> x :pc/cnf (map :prop/id)))
+                    min-y (apply min (->> y :pc/cnf (map :prop/id)))]
                 (cond (< min-x min-y) -1,
                       (< min-y min-x) +1,
                       :else ; choose the one with lowest sum of pos
-                      (let [sum-x (apply + (->> x :cnf (map :pos)))
-                            sum-y (apply + (->> y :cnf (map :pos)))]
+                      (let [sum-x (apply + (->> x :pc/cnf (map :prop/id)))
+                            sum-y (apply + (->> y :pc/cnf (map :prop/id)))]
                         (cond (< sum-x sum-y) -1
                               (< sum-y sum-x) +1
                               :else ; same sum of pos; choose the one with lowest positive min pos
-                              (let [min-neg-x (safe-min (->> x :cnf (remove :neg?) (map :pos)))
-                                    min-neg-y (safe-min (->> y :cnf (remove :neg?) (map :pos)))]
+                              (let [min-neg-x (safe-min (->> x :pc/cnf (remove :neg?) (map :prop/id)))
+                                    min-neg-y (safe-min (->> y :pc/cnf (remove :neg?) (map :prop/id)))]
                                 (if (< min-neg-x min-neg-y) -1 +1))))))))
       clauses))))
 
 (defn set-pclause-prop-ids
-  "Add a :pos key to every :pred of each :cnf of :pclauses. 
+  "Add a :prop/id key to every :lit/pred of each :pc/cnf of :pclauses. 
    It indicates the proposition number for the MAXSAT analysis."
   [pclause prop-ids game]
-  (update pclause :cnf
+  (update pclause :pc/cnf
           (fn [cnf]
             (mapv (fn [lit]
-                    (let [id (get prop-ids (:pred lit))]
+                    (let [id (get prop-ids (:lit/pred lit))]
                       (if id
-                        (assoc lit :pos id)
+                        (assoc lit :prop/id id)
                         (throw (ex-info "Literal from pclause CNF not in prop-ids:"
-                                        {:game game :pred (:pred lit) 
+                                        {:game game :pred (:lit/pred lit) ; POD not :lit/pred ?
                                          :pclause pclause :prop-ids prop-ids})))))
                   cnf))))
 
@@ -629,7 +728,7 @@
   [kb]
   (letfn [(pinv [pc]
             (-> pc
-                (update-in [:cnf 0 :neg?] not)
+                (update-in [:pc/cnf 0 :neg?] not)
                 (update :prob #(- 1.0 %))
                 (update :id #(-> % name (str "-inv") keyword))
                 (update :comment #(str % " | INV"))))]
@@ -640,7 +739,7 @@
   [kb]
   (letfn [(pinv [pc]
             (-> pc
-                (update-in [:cnf 0 :neg?] not)
+                (update-in [:pc/cnf 0 :neg?] not)
                 (update :prob #(- 1.0 %))
                 (update :id #(-> % name (str "-inv") keyword))
                 (update :comment #(str % " | INV"))))]
@@ -652,7 +751,7 @@
   [kb]
   (letfn [(pinv [pc]
             (-> pc
-                (update-in [:cnf 0 :neg?] not)
+                (update-in [:pc/cnf 0 :neg?] not)
                 (update :prob #(- 1.0 %))
                 (update :id #(-> % name (str "-inv") keyword))
                 (update :comment #(str % " | INV"))))]
@@ -716,7 +815,7 @@
   [pclause]
   (swap! diag2 #(assoc % :pclause-pos-error? pclause))
     (->> pclause
-       :cnf
+       :pc/cnf
        (mapv (fn [{:keys [neg? pos]}] (if neg? (- pos) pos)))))
 
 (defn one-clause-wdimacs 
@@ -737,7 +836,7 @@
                                :else          (conj vs " ")))
                        []
                        (range 1 (-> kb :prop-ids count inc)))
-               (let [largest (apply max (map #(-> % :cnf count) (:pclauses kb)))]
+               (let [largest (apply max (map #(-> % :pc/cnf count) (:pclauses kb)))]
                  (into pid-vec (repeat (- largest (count pid-vec)) " "))))]
     (cond
       commented? (cl-format nil "~5A~{~5d~} c ~A" cost (conj vals 0) (or (:comment pclause) ""))
@@ -848,38 +947,38 @@
     (swap! diag2 #(assoc % :wdimacs result))
     result))
 
-(defn make-not-head-pclauses
+#_(defn make-not-head-pclauses
   "Create all the pclauses (maps) for the argument rule and ground facts
    where these facts are the proposition forms of prop-id."
   [kb nhrule gfacts]
   (let [subs (query-cform (:tail nhrule) gfacts)]
     (->> subs
          (reduce (fn [pcs sub]
-                   (let [cnf (uni/subst (:cnf nhrule) sub)]
+                   (let [cnf (uni/subst (:pc/cnf nhrule) sub)]
                      (conj pcs
-                           {:cnf cnf
+                           {:pc/cnf cnf
                             :prob (:prob nhrule)
                             :type :rule
                             :id (-> (str "pc-" (swap! (-> kb :vars :pclause-count) inc) "-nh"))
                             :comment (str "NH " (:id nhrule) " " sub)})))
                  [])
          ;; If the nhrule is about anti-symmetry only need one of the bindings.
-         (group-by #(-> % :cnf set))
+         (group-by #(-> % :pc/cnf set))
          (reduce-kv (fn [pcs _ v] (conj pcs (first v))) []))))
 
-(defn unique-preds
+#_(defn unique-preds
   [pclauses]
-  (reduce (fn [u c] (into u (map :pred c)))
+  (reduce (fn [u c] (into u (map :lit/pred c)))
           #{}
-          (map :cnf pclauses)))
+          (map :pc/cnf pclauses)))
 
-(defn add-not-head-pclauses
+#_(defn add-not-head-pclauses
   "Return new pclauses for rules with NOT in the head.
    Purposes of these rules include (1) enforcing disjointed types of individuals,
    and (2) enforcing anti-symmetric relations. The latter cannot be done with ordinary
    rules because inference won't stop."
   [kb]
-  (let [not-heads (filter #(-> % :head form2lit :neg?) (->> kb :rules vals))
+  (let [not-heads (filter #(-> % :head form2lit :neg?) (->> kb :app/rules vals))
         ground-facts (->> kb :pclauses unique-preds)]
     (mapcat #(make-not-head-pclauses kb % ground-facts) not-heads)))
 
@@ -892,6 +991,7 @@
    one for each role-filler, and navigation continues for each new path individually.
    The nodes (:step) navigated are 'heads' 'observations' 'facts' and 'assumptions'."
   [proofs]
+  (reset! diag proofs)
   (letfn [(pick-key [form]
             (cond (:rule-used? form) :rule?
                   (:observation-used? form) :observation?
@@ -982,7 +1082,7 @@
    The :steps is a depth-first navigation of the proof: each form of the rhs of the of a rule
    is expanded completely onto :steps before moving expanding the next form of the rhs."
   [kb]
-  (let [observations (conj (:observations kb) (:query kb))
+  (let [observations (conj (:app/observations kb) (:app/query kb))
         result (as-> (walk-rules (-> kb :raw-proofs :proofs)) ?pvecs
                  (winnow-regardless kb ?pvecs)
                  (winnow-by-priority kb ?pvecs)
@@ -1079,10 +1179,10 @@
             (-> kb :rules vals))))
 
 ;;; There is a good test of this in explain_test.clj
-(defn consistent-cvar-naming
+(defn rule-based-cvar-naming
   "The naming of cvars in facts can be whatever. It needs to be uniform for rule-product.
    This takes a vector of 'data' for a particular predicate (which because facts can have
-   cvars isn't exactly data) and applies the rule's cvar naming convention."
+   cvars, isn't exactly data) and applies the rule's cvar naming convention."
   [kb rule-id ix pred-data]
   (let [rule-form (-> kb :rules rule-id :tail (nth (dec ix)))]
     (reduce (fn [res form]
@@ -1102,6 +1202,37 @@
       ;; otherwise inconsistent and will be caught later.
       preds)))
 
+#_(defn distinct-unify
+  "Collect all the unifications from pairs of forms (all having the same predicate).
+   Substitute for the variables and return the distinct predicates resulting."
+  [preds]
+  (when-not (== 1 (->> preds (map first) distinct count))
+    (throw (ex-info "Expected same predicate for all" {:preds preds})))
+  (let [binds (atom [])] ; POD could have two different bindings for same var?
+    (for [[p1 p2] (apply util/pairs preds)]
+      (swap! binds conj (uni/unify p1 p2)))
+    (for [p preds
+          bind @binds]
+    (->> preds
+         (mapv #(uni/subst % @result))
+         distinct))))
+
+(defn distinct-unify
+  "Collect all the unifications from pairs of forms (all having the same predicate).
+   Substitute for the variables and return the distinct predicates resulting."
+  [preds]
+  (if (== 1 (count preds))
+    preds
+    (if (not= 1 (->> preds (map first) distinct count))
+      (throw (ex-info "Expected same predicate for all" {:preds preds}))
+      (let [binds (->> (for [[p1 p2] (apply util/pairs preds)] (uni/unify p1 p2))
+                       (filter not-empty))]
+        (-> (for [p preds
+                  bind binds]
+              (uni/subst p bind))
+            distinct
+            vec)))))
+
 ;;; POD I think this needs to handle NOT.
 ;;; (rule-product eee :rule-4 (:rule-4 (tailtab eee '(ta/conceptType ta/DemandType demand))))
 ;;; (rule-product eee :rule-2 (:rule-2 (tailtab eee '(ta/conceptType ta/DemandType demand))))
@@ -1114,6 +1245,8 @@
   [kb rule-id rule-tailtab]
   (let [tail (-> kb :rules rule-id :tail)
         datatab (:datatab kb)
+        ;; Each set here is a collection of literals based on data (:facts from the kb) that unify with the literal.
+        ;; 
         sets (reduce (fn [plustab rt-key]
                        (let [[ix _] rt-key]
                          ;;#p pred-sym
@@ -1121,14 +1254,15 @@
                                       into
                                       (reduce (fn [res lit] ; lit is really a predicate form. 
                                                 (if (ground? lit)
-                                                  res
+                                                  res ; skip???
                                                   (into res
                                                         (filter #(uni/unify lit %) 
-                                                                (consistent-cvar-naming
+                                                                (rule-based-cvar-naming
                                                                  kb rule-id ix (get datatab (first lit)))))))
                                               []
                                               (get rule-tailtab rt-key)))
-                              (reduce-kv (fn [m k v] (assoc m k (distinct v))) {}))))
+                              ;; distinct-unify was distinct, but blocked-road-kb gives 3 solutions!
+                              (reduce-kv (fn [m k v] (assoc m k (distinct-unify v))) {}))))
                      rule-tailtab
                      (keys rule-tailtab))]
     ;; There WAS a lazy sequence here (for transducer below)
@@ -1226,7 +1360,7 @@
 (defn observation-solve?
   [kb prv]
   (->> kb
-       :observations
+       :app/observations
        (map #(when-let [subs (uni/unify prv %)]
                (when-not (empty? subs) (merge-bindings subs :source "OBS"))
                (cond->  {:prvn (uni/subst prv subs)}
@@ -1240,7 +1374,7 @@
   (->> kb 
        :facts
        vals
-       (map #(-> % :cnf first lit2form))
+       (map #(-> % :pc/cnf first lit2form))
        (map #(when-let [subs (uni/unify prv %)]
                (when-not (empty? subs) (merge-bindings subs :source "FACT"))
                (cond->  {:prvn (uni/subst prv subs)}
@@ -1255,7 +1389,7 @@
   (if-let [subs (some #(uni/unify form %) (-> kb :assumptions-used deref vals))]
     (do (when-not (empty? subs) (merge-bindings subs :source "ASSUM"))
         {:form form :subs subs})
-    (let [name (keyword (str "assume-" (swap! (-> kb :vars :assumption-count) inc)))
+    (let [name (keyword (str "assum-" (swap! (-> kb :vars :assumption-count) inc)))
           skol (skolemize kb form)]
       (when-not (empty? (:subs skol)) (merge-bindings (:subs skol) :source "ASSUM"))
       (swap! (:assumptions-used kb) #(assoc % name (:form skol)))
@@ -1308,18 +1442,18 @@
   "Recursively develop a tree that can be interpreted to one or more proofs of the argument. "
   [kb {:keys [prv caller] :as proof}]
   (dbg-scope "PROOF FOR" prv "caller=" caller)
-  (let [proof (assoc proof :proofs [])
-        heads (->> kb :rules vals (map :head))
+  (let [proof (assoc proof :pf/proofs [])
+        heads (->> kb :app/rules vals (map #(-> % :pc/cnf first :lit/pred)))
         bound (atom nil)]
     (cond (reset! bound (observation-solve? kb prv))
-          (update proof :proofs into (map #(assoc % :observation-used? true) @bound))
+          (update proof :pf/proofs into (map #(assoc % :pf/observation-used? true) @bound))
           (reset! bound (fact-solve? kb prv))
-          (update proof :proofs into (map #(assoc % :fact-used? true) @bound)),
+          (update proof :pf/proofs into (map #(assoc % :pf/fact-used? true) @bound)),
           (some (fn [head] (uni/unify head prv)) heads)
-          (let [result (update proof :proofs into
+          (let [result (update proof :pf/proofs into
                                (reduce-kv
                                 (fn [res rule-id sols]
-                                  (let [rule (-> kb :rules rule-id)
+                                  (let [rule (-> kb :app/rules rule-id)
                                         real-sols (consistent-calls? sols caller rule)]
                                     (into res
                                           (doall
@@ -1329,22 +1463,22 @@
                                            ;; (3) Progressive binding: the bindings from RHSs on the left need to be substituted into RHSs on the right.
                                            (map (fn [sol]
                                                   (dbg-scope "Enter rule" rule-id)
-                                                  (push-scope (merge (top-scope) (:bindings caller)))
-                                                  (merge-bindings (:bindings sol) :source rule-id)
+                                                  (push-scope (merge (top-scope) (:pf/bindings caller)))
+                                                  (merge-bindings (:pf/bindings sol) :source rule-id)
                                                   (let [prv-renamed (prv-with-rule-vars prv rule sol)
                                                         rule-result (as-> {} ?r
-                                                                        (assoc ?r :rule-used? true)
-                                                                        (assoc ?r :rule-used rule-id)
-                                                                        (assoc ?r :proving prv-renamed) 
-                                                                        (assoc ?r :rhs-queries sol) ; POD problem here that each component might be in a
-                                                                        (assoc ?r :decomp
-                                                                               (doall (mapv (fn [prv]
-                                                                                              (let [prv (progressive-bind prv (top-scope))]
-                                                                                                (merge-bindings (merge (:bindings sol) (:bindings caller)) :source prv)
-                                                                                                (prove-fact kb {:prv prv ; top-scope is thereby progressively updated..., I think!
-                                                                                                                :caller {:rule-id rule-id :sol prv :bindings (merge (top-scope) (:bindings sol))}})))
-                                                                                            (:rhs sol))))
-                                                                        (update-in ?r [:rhs-queries :bindings] #(merge % (top-scope))))]
+                                                                      (assoc ?r :pf/rule-used? true)
+                                                                      (assoc ?r :pf/rule-used rule-id)
+                                                                      (assoc ?r :pf/proving prv-renamed) 
+                                                                      (assoc ?r :pf/rhs-queries sol) ; POD problem here that each component might be in a
+                                                                      (assoc ?r :pf/decomp
+                                                                             (doall (mapv (fn [prv]
+                                                                                            (let [prv (progressive-bind prv (top-scope))]
+                                                                                              (merge-bindings (merge (:pf/bindings sol) (:pf/bindings caller)) :source prv)
+                                                                                              (prove-fact kb {:pf/prv prv ; top-scope is thereby progressively updated..., I think!
+                                                                                                              :pf/caller {:pf/rule-id rule-id :pf/sol prv :pf/bindings (merge (top-scope) (:pf/bindings sol))}})))
+                                                                                          (:rhs sol))))
+                                                                      (update-in ?r [:pf/rhs-queries :pf/bindings] #(merge % (top-scope))))]
                                                     (pop-scope)
                                                     (dbg-scope "Exit rule" rule-id)
                                                     rule-result))
@@ -1354,7 +1488,7 @@
             result)
           :else
           (let [{:keys [subs form]} (add-assumption kb prv)]
-            (update proof :proofs conj {:assumption-used? true :prvn (uni/subst form subs)})))))
+            (update proof :pf/proofs conj {:pf/assumption-used? true :pf/prvn (uni/subst form subs)})))))
 
 ;;; POD This might not be sufficient; might need to search deep for bindings???
 (defn find-binding-sets
@@ -1403,8 +1537,8 @@
   "Group-by observations and facts by their predicate-symbol"
   [kb]
   (let [data (-> []
-                 (into (:observations kb))
-                 (into (map #(-> % :cnf first :pred) (vals (:facts kb)))))]
+                 (into (:app/observations kb))
+                 (into (map #(-> % :pc/cnf first :lit/pred) (vals (:app/facts kb)))))]
     (group-by first data)))
 
 (defn random-games
@@ -1450,8 +1584,8 @@
     (if pretty-analysis?
       (as-> ?game-kb ?g2
         (update ?g2 :pclauses (fn [pcs] (mapv (fn [pc] ; POD This sorting for pretty wdimacs?
-                                                (update pc :cnf
-                                                        (fn [cnf] (vec (sort-by #(-> % :pred :pos) cnf))))) pcs)))
+                                                (update pc :pc/cnf
+                                                        (fn [cnf] (vec (sort-by #(-> % :pred :prop/id) cnf))))) pcs))) ; POD not :lit/pred
         (update ?g2 :pclauses sort-clauses)
         (assoc  ?g2 :wdimacsc (wdimacs-string ?g2 :commented? true)))
       ?game-kb)))
@@ -1459,7 +1593,7 @@
 (def ngames-played (atom 0))
 
 (defn run-one 
-  ":pclauses has been prepared to run the MAXSAT problem (except for setting pids and :cnf).
+  ":pclauses has been prepared to run the MAXSAT problem (except for setting pids and :pc/cnf).
    Create the wdimacs and run python-maxsat, setting :mpe."
   [kb game & {:keys [pretty-analysis?]}]
   (swap! ngames-played inc)
@@ -1586,14 +1720,15 @@
       (finalize-kb ?kb query)
       (clear! ?kb)
       (assoc  ?kb :datatab         (datatab ?kb)) 
-      (assoc  ?kb :raw-proofs      (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}}))
+      (assoc  ?kb :raw-proofs      (s/assert :app/proof (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}})))
+      (reset! diag ?kb)
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
       (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
       (update ?kb :pclauses       #(into % (inverse-facts ?kb)))
       (update ?kb :pclauses       #(into % (inverse-rules ?kb)))
-      (update ?kb :pclauses       #(into % (add-not-head-pclauses ?kb)))
+      #_(update ?kb :pclauses       #(into % (add-not-head-pclauses ?kb)))
       (assoc  ?kb :pclauses        (reduce-pclauses-using-observations ?kb))
       (update ?kb :pclauses       #(add-id-to-comments %))
       (assoc  ?kb :save-pclauses   (:pclauses ?kb))
@@ -1646,16 +1781,16 @@
 
 (defn report-kb
   [kb stream]
-  (doall (for [rule (->> kb :rules vals (sort-by #(name2num (:id %))))]
+  (doall (for [rule (->> kb :app/rules vals (sort-by #(name2num (:id %))))]
            (cl-format stream "~%~5,3f ~8A :: ~A :- ~{~A ~}"
-                      (:prob rule) (:id rule) (:head rule) (:tail rule))))
+                      (:pc/prob rule) (:pc/id rule) (-> rule :cnf first lit2form) (->> rule :cnf rest (map comp-lit) (map lit2form)))))
   (doall (for [fact (->> kb :facts vals (sort-by #(name2num (:id %))))]
            (cl-format stream "~%~5,3f ~9A :: ~A"
-                      (:prob fact) (:id fact) (-> fact :cnf first lit2form))))
+                      (:pc/prob fact) (:pc/id fact) (-> fact :pc/cnf first lit2form))))
   (doall (for [assum (->> (-> kb :assumptions-used deref) (sort-by #(name2num (:id %))))]
            (cl-format stream "~%~5,3f ~9A :: ~A"
-                      (:prob assum) (:id assum) (-> assum :cnf first lit2form))))
-  (cl-format *out* "~{~%~A~}" (:observations kb))
+                      (:pc/prob assum) (:pc/id assum) (-> assum :pc/cnf first lit2form))))
+  (cl-format *out* "~{~%~A~}" (:app/observations kb))
   true)
 
 ;;; POD, this is a good candidate for sending to the SPA log!

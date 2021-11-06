@@ -30,6 +30,19 @@
   [n]
   (reduce (fn [s _] (str s " ")) "" (range n)))
 
+(defn pairs
+  "Return all pairs of argument items"
+  [& items]
+  (let [p (atom [])]
+    (loop [rem items]
+      (let [r (first rem)]
+        (doall
+         (doseq [item (rest rem)]
+           (swap! p conj (vector r item)))))
+      (when (not-empty (rest rem))
+        (recur (rest rem))))
+    @p))
+
 (defn my-abbreviated-output-fn
   "I don't want :hostname_ and :timestamp_ in the log output."
   ([data]       (taoensso.timbre/default-output-fn nil  (dissoc data :hostname_ :timestamp_)))

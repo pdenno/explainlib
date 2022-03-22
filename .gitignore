@@ -3,7 +3,7 @@
 *.log
 *.sw?
 *.swp
-*jar
+*.jar
 .DS_Store
 .nrepl*
 .nrepl-port

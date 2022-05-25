@@ -11,7 +11,7 @@ The algorithm for producing the proofs is similar to that described by Raghavan 
 The algorithm for solving MPE problems is similar to that described by Park[^2] and uses the RC2 MaxSAT solver, Ignatiev et al.[^3].
 Owing to the computational challenge of some of MPE problems, typically not all proofs are assessed together.
 Specifically, the algorithm uses a tournament where a random selection of proofs compete and the ones with the best MPE score
-advance to the next round of the tournament.
+from each such game advance to the next round of the tournament.
 
 The library is currently being isolated/refactored from its usage in a monolithic application, so it is apt to be a bit unstable, 
 even on the main repository branch.

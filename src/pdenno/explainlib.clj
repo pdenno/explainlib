@@ -1,4 +1,4 @@
-(ns pdenno.explainlib
+(ns pdenno.explainlib ; ToDo: When you remove pdenno from the classpath, this would be corel.clj.
   (:require
    [clojure.core.unify           :as uni]
    [clojure.math.combinatorics   :as combo]
@@ -34,7 +34,7 @@
 (s/def ::horn-clause     (s/and ::non-empty-clause #(<= (->> % (remove :neg?) count) 1)))
 (s/def ::definite-clause (s/and ::non-empty-clause #(== (->> % (remove :neg?) count) 1)))
 (s/def ::falsifiable     (s/and #(s/valid? ::non-empty-clause (:cnf %))
-                                 (s/keys ::req-un [:cnf]) ; recalled-facts (from proofs) are like this.
+                                 (s/keys :req-un [:cnf]) ; recalled-facts (from proofs) are like this.
                                 #(== (-> % :cnf count) 1)))
 
 ;; POD Non-positional CNF will need some thought. See defn hard-clauses
@@ -46,9 +46,9 @@
 (s/def ::tail    (s/and vector? (s/coll-of ::pred :min-count 1)))
 (s/def ::prob    (s/double-in :min 0.0 :max 1.0))
 (s/def ::id      keyword?)
-(s/def ::rule    (s/and (s/keys ::req-un [::head ::tail ::prob ::id])
+(s/def ::rule    (s/and (s/keys :req-un [::head ::tail ::prob ::id])
                         #(s/valid? ::horn-clause (:cnf %))))
-(s/def ::pclause (s/or :typical (s/keys ::req-un [::cnf ::prob])
+(s/def ::pclause (s/or :typical (s/keys :req-un [::cnf ::prob])
                        :empty  #(-> % :cnf empty?)))
 (s/def ::bindings (s/and map? #(every? cvar? (keys %))))
 (s/def ::binding-stack (s/and vector? (s/coll-of ::bindings :min-count 0)))

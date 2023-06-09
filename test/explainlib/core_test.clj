@@ -1,11 +1,11 @@
-(ns pdenno.explainlib-test
+(ns explainlib.core-test
   (:require
    [clojure.core.unify     :as uni]
    [clojure.test           :refer [deftest is testing]]
    [clojure.set             :as sets]
    [libpython-clj2.require :refer [require-python]]
    [libpython-clj2.python :as py :refer [py. py.. py.-]]
-   [pdenno.explainlib :as explain :refer [defkb]]))
+   [explainlib.core :as explain :refer [defkb explain]]))
 
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
@@ -13,26 +13,26 @@
 ;;;================= Test running RC2 MAXSAT =============================
 (def basic-problem
   "p wcnf 9 21 2661
-2661   1 2                                            0 
+2661   1 2                                            0
 461 -5 0
 461 -8 0
-92           -2                                       0 
-92      -1                                            0 
-69                 3                                  0 
-300               -3                                  0 
-120                               6                   0 
-36                               -6                   0 
-5                                                9    0 
-300                                             -9    0 
-92      -1             -4                             0 
-120      1                       -6                   0 
-36      -1                       -6                   0 
-92           -2        -4                             0 
-120           2                       -7              0 
-36           -2                       -7              0 
-36                -3                       -8         0 
-120               -3                   7        -9    0 
-36                -3                  -7        -9    0 
+92           -2                                       0
+92      -1                                            0
+69                 3                                  0
+300               -3                                  0
+120                               6                   0
+36                               -6                   0
+5                                                9    0
+300                                             -9    0
+92      -1             -4                             0
+120      1                       -6                   0
+36      -1                       -6                   0
+92           -2        -4                             0
+120           2                       -7              0
+36           -2                       -7              0
+36                -3                       -8         0
+120               -3                   7        -9    0
+36                -3                  -7        -9    0
 36                          -5                  -9    0")
 
 ;;; POD Currently, I'm depending on the ordering of same-cost solutions!
@@ -61,15 +61,15 @@
 824           2                   6    0
 824     -1                        5    0
 824          -2                   5    0
-22       1                   0 
-161     -1                   0 
-22            2              0 
-161          -2              0 
-22                 3         0 
-161               -3         0 
-22                      4    0 
-161                    -4    0 
-69      -1   -2              0 
+22       1                   0
+161     -1                   0
+22            2              0
+161          -2              0
+22                 3         0
+161               -3         0
+22                      4    0
+161                    -4    0
+69      -1   -2              0
 22                -3   -4    0 ")
 
 (deftest tseitin-2-test
@@ -105,29 +105,29 @@
 1989                                         -8                  12         0
 1989                                              -9        11        13      0
 
-461                                    7              0 
-1                                     -7              0 
-41                                          8         0 
-108                                        -8         0 
-51                           5                        0 
-92                          -5                        0 
-51                                6                   0 
-92                               -6                   0 
-51                                               9    0 
-92                                              -9    0 
-5       -1                                            0 
-92       1        -3                                  0 
-51      -1        -3                                  0 
-92       1                  -5                  -9    0 
-51      -1                  -5                  -9    0 
-5            -2                                       0 
-92            2        -4                             0 
-51           -2        -4                             0 
-92            2                  -6             -9    0 
-51           -2                  -6             -9    0 
-161                3                  -7              0 
-22                -3                  -7              0 
-161                     4                  -8         0 
+461                                    7              0
+1                                     -7              0
+41                                          8         0
+108                                        -8         0
+51                           5                        0
+92                          -5                        0
+51                                6                   0
+92                               -6                   0
+51                                               9    0
+92                                              -9    0
+5       -1                                            0
+92       1        -3                                  0
+51      -1        -3                                  0
+92       1                  -5                  -9    0
+51      -1                  -5                  -9    0
+5            -2                                       0
+92            2        -4                             0
+51           -2        -4                             0
+92            2                  -6             -9    0
+51           -2                  -6             -9    0
+161                3                  -7              0
+22                -3                  -7              0
+161                     4                  -8         0
 22                     -4                  -8         0 ")
 
 (deftest tseitin-4-test
@@ -146,10 +146,10 @@
   :facts [{:prob 0.3 :fact (cee ?x)}]
   :observations [])
 
-;;; My interpretation is the ProbLog interpretation. 
+;;; My interpretation is the ProbLog interpretation.
 ;;; The ProbLog reading of these is CAUSAL: If +b ^ +e, this  causes an alarm to be true with probabiility 0.9.
 ;;; Further, the CPT entries that aren't stated are assumed to be zero.
-;;; This makes sense from the causal perspective if you assume that you've accounted for all causes. 
+;;; This makes sense from the causal perspective if you assume that you've accounted for all causes.
 ;;; (def aaa (explain '(alarm plaza) et/alarm-kb))
 (defkb alarm-kb
   :rules [{:prob 0.9
@@ -166,7 +166,7 @@
 
 ;;; p wcnf 2 8 603
 ;;; 603      1    2    0
-;;; 
+;;;
 ;;; 1 : 120      1         0 c FA (burglary plaza)
 ;;; 2 : 36      -1         0 c FA (not (burglary plaza))
 ;;; 3 : 22            2    0 c FA (earthquake plaza)
@@ -174,22 +174,22 @@
 ;;; 5 : 230      1   -2    0 c RU :rule-3 {?loc-r3 plaza} | INV | REDU (alarm plaza)
 ;;; 6 : 22      -1    2    0 c RU :rule-2 {?loc-r2 plaza} | INV | REDU (alarm plaza)
 ;;; 7 : 11      -1   -2    0 c RU :rule-1 {?loc-r1 plaza} | INV | REDU (alarm plaza)
-;;; 
+;;;
 ;;; Cost: 80
 ;;;   1 true  (burglary plaza)
 ;;;  -2 false (earthquake plaza)
-;;; 
+;;;
 ;;; {:model [  1  -2] :cost    80 :prob 0.009}  2:[-1] 3:[2] 6:[-1 2] (+ 36 22 22)
 ;;; {:model [  1   2] :cost   208 :prob 0.007}  2:[-1] 4:[-2] 7:[-1 -2] (+ 36 161 11)
 ;;; {:model [ -1   2] :cost   511 :prob 0.002}  1:[1] 4:[-2] 5:[1 -2] (+ 120 161 230)
-;;; 0.900 :rule-1  :: (alarm ?loc-r1) :- (burglary ?loc-r1) (earthquake ?loc-r1) 
-;;; 0.800 :rule-2  :: (alarm ?loc-r2) :- (burglary ?loc-r2) (not (earthquake ?loc-r2)) 
-;;; 0.100 :rule-3  :: (alarm ?loc-r3) :- (not (burglary ?loc-r3)) (earthquake ?loc-r3) 
+;;; 0.900 :rule-1  :: (alarm ?loc-r1) :- (burglary ?loc-r1) (earthquake ?loc-r1)
+;;; 0.800 :rule-2  :: (alarm ?loc-r2) :- (burglary ?loc-r2) (not (earthquake ?loc-r2))
+;;; 0.100 :rule-3  :: (alarm ?loc-r3) :- (not (burglary ?loc-r3)) (earthquake ?loc-r3)
 ;;; 0.700 :fact-1   :: (burglary ?loc-f1)
 ;;; 0.200 :fact-2   :: (earthquake ?loc-f2)
 
 ;;; This one hasn't really been validated. It has no hard clauses.
-;;; That may be reasonable, given that all RHSs are allowed. 
+;;; That may be reasonable, given that all RHSs are allowed.
 (defkb alarm-2-kb
   :rules [{:prob 0.9
            :head  (alarm ?loc)
@@ -211,7 +211,7 @@
   :rules [{:prob 0.9
            :head (D ?x)
            :tail [(A ?x) (B ?x)]}
-          {:prob 0.8
+          {:prob 0.9
            :head (D ?y)
            :tail [(A ?y) (C ?y)]}]
   :facts [{:prob 0.99 :fact (A ?a)}
@@ -221,10 +221,53 @@
 (defkb abcd2-kb
   :rules [{:prob 0.9
            :head (D ?x)
+           :tail [(A ?x) (B ?x)]}
+          {:prob 0.9
+           :head (D ?y)
+           :tail [(A ?y) (C ?y)]}]
+  :facts [{:prob 0.99 :fact (A ?a)}
+          {:prob 0.97 :fact (B ?b)}
+          {:prob 0.98 :fact (C ?c)}])
+
+(defkb one-rule-kb
+  :rules [{:prob 0.9
+           :head (D ?x)
            :tail [(A ?x) (B ?x)]}]
   :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.98 :fact (B ?b)}
-          {:prob 0.97 :fact (C ?c)}])
+          {:prob 0.97 :fact (B ?b)}
+          {:prob 0.98 :fact (C ?c)}])
+
+(deftest simple-fact-probabilities
+  (testing "Testing that one rule works. Note antecedent C is not used. Phew!"
+    (is (= [{:cost 245, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
+           (-> (explain '(D foo) one-rule-kb) :mpe))))
+  (testing "Testing that two proofs that only differ by the probability of one antecedent are ordered correctly."
+    (testing "Testing one ordering"
+    (is (= [{:cost 595, :proof-id :proof-1, :pvec '((A foo) (B foo))}
+            {:cost 636, :proof-id :proof-2, :pvec '((A foo) (C foo))}]
+           (-> (explain '(D foo) abcd-kb) :mpe))))
+    (testing "Testing same two proofs, different ordering."
+      (is (= [{:cost 595, :proof-id :proof-2, :pvec '((A foo) (C foo))}
+              {:cost 636, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
+             (-> (explain '(D foo) abcd2-kb) :mpe))))))
+
+;;; (explain '(inaccurate-tcp robot-8) et/mfglet-kb)
+(defkb mfglet-kb
+  :rules [{:prob 0.4
+           :head (wear ?robot ?joint)
+           :tail [(stressed ?robot ?joint)]}
+          {:prob 0.8
+           :head (inaccurate-tcp ?robot)
+           :tail [(wear ?robot ?joint) (backlash-sim ?robot ?joint)]}
+          {:prob 0.7
+           :head (inaccurate-tcp ?robot)
+           :tail [(failing-sensor ?robot ?joint)
+                  (bad-sensor-processing ?robot)]}]
+  ;; Distilled from controller info, process knowledge, and a simulation:
+  :facts [{:prob 0.9 :fact (stressed robot-8 joint-2)}
+          {:prob 0.8 :fact (backlash-sim robot-8 joint-2)}
+          {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
+          {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
 
 ;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
 ;;; [(accident plaza) 1]
@@ -248,7 +291,7 @@
 ;;; assume clearing-wreck. default-assumption-probability  is 0.40 thus ASYMMETRIC
 ;;; I think that is enough to make the top explanation accident/clearing-wreck.
 ;;; (def bra (explain '(blocked-road plaza) et/bra-kb))
-(defkb bra-kb 
+(defkb bra-kb
   :rules  [{:prob 0.5
             :head (blocked-road ?loc)
             :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
@@ -261,7 +304,7 @@
   :observations [])
 
 
-(defkb bs-kb 
+(defkb bs-kb
   :rules  [{:prob 0.5
             :head (blocked-road ?loc)
             :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
@@ -280,9 +323,9 @@
   :rules [{:prob 0.70 :head (concatKey ?tab ?x ?y)      :tail [(jobID ?tab ?x ?y)]}
           {:prob 0.70 :head (jobID ?tab ?x ?y)          :tail [(date ?tab ?x) (productDesc ?tab ?y)]}
           {:prob 0.05 :head (productDesc ?tab ?x)       :tail [(date ?tab ?x)]}
-          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col1 ?col2)]}   
-          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col2 ?col1)]}] 
-  :facts [{:prob 0.01 :fact (jobID ?tab ?x ?x)}] 
+          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col1 ?col2)]}
+          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col2 ?col1)]}]
+  :facts [{:prob 0.01 :fact (jobID ?tab ?x ?x)}]
   :observations [(date Table-1 COLA)
                  (productDesc Table-1 COLB)])
 
@@ -290,8 +333,8 @@
   :rules [{:prob 0.70 :head (concatKey ?tab ?x ?y)      :tail [(jobID ?tab ?x ?y)]}
           {:prob 0.70 :head (jobID ?tab ?x ?y)          :tail [(date ?tab ?x) (productDesc ?tab ?y)]}
           {:prob 0.05 :head (productDesc ?tab ?x)       :tail [(date ?tab ?x)]}
-          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col1 ?col2)]}   
-          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col2 ?col1)]}] 
+          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col1 ?col2)]}
+          {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col2 ?col1)]}]
   :facts [{:prob 0.01 :fact (jobID ?tab ?x ?x)}
           {:prob 0.90 :fact (date Table-1 COLA)}
           {:prob 0.90 :fact (productDesc Table-1 COLB)}])
@@ -310,21 +353,21 @@
 ;;; (1) Here rule prob 40/70 (favoring more complex one) infers (decisionVar TeamsOnLine) correctly. But (decisionVar TeamsOnLine) is an easy observation.
 ;;; (2) Add (decisionVar TeamsOnLine) and it correctly infers that NOT (decisionVar ActualEffort).
 ;;; (3) Change rule prob to 60/60 and it still gets it right!
-;;; (explain '(objectiveFnVal ActualEffort) r1)
+;;; (explain '(objectiveFnVal ActualEffort) et/r1)
 (defkb r1
   :rules [{:prob 0.60 :head (objectiveFnVal ?x) :tail [(designVar ?x)                               (contributesToObj ?x)]}
           {:prob 0.60 :head (objectiveFnVal ?y) :tail [(optLocalVar ?y) (designVar ?x) (func ?x ?y) (contributesToObj ?y)]}]
-  :facts [{:prob 0.10 :fact (func ?x ?x)}] 
+  :facts [{:prob 0.10 :fact (func ?x ?x)}]
   :observations [(optLocalVar ActualEffort)
-                 (designVar TeamsOnLine) 
+                 (designVar TeamsOnLine)
                  (func TeamsOnLine ActualEffort)
                  (contributesToObj ActualEffort)])
 
 ;;; (def eee (explain '(allDifferent doesJob) et/r2))
-;;; It concludes that: 
-;;;  (1) doesJobs is injective from Workers to Jobs. 
-;;;  (2) The Workers set MUST NOT BE bigger than the Jobs set. 
-;;;  (3) The Jobs set CAN BE bigger than the Workers set. 
+;;; It concludes that:
+;;;  (1) doesJobs is injective from Workers to Jobs.
+;;;  (2) The Workers set MUST NOT BE bigger than the Jobs set.
+;;;  (3) The Jobs set CAN BE bigger than the Workers set.
 (defkb r2 ; More stuff for assignment problem: is it legitimately using allDifferent?
   :rules [{:prob 0.90 :head (allDifferent ?f)       :tail [(func1 ?f ?x ?y) (injective ?f)]}
           {:prob 0.90 :head (func1 ?f ?x ?y)        :tail [(decisionVar ?f) (varDomain ?f ?x) (varCodomain ?f ?y)]}
@@ -352,7 +395,7 @@
 ;;; In ~is~ the correct one goes first in the =. (is (= correct-value generated-value))
 #_(deftest test-binding-sets
   (testing "that binding sets are created correctly"
-    (is (= '[{?f doesJob, ?y Jobs, ?x Workers} {?f TeamsOnLine, ?x $x-skolem, ?y $y-skolem}] 
+    (is (= '[{?f doesJob, ?y Jobs, ?x Workers} {?f TeamsOnLine, ?x $x-skolem, ?y $y-skolem}]
            (explain/binding-sets-aux '[{?f TeamsOnLine} {?f doesJob, ?x Workers} {?f doesJob, ?y Jobs}])))
     (is (= '[{?f doesJob, ?y Jobs, ?x Workers}]
            (explain/binding-sets-aux '[{?f doesJob} {?f doesJob, ?x Workers} {?f doesJob, ?y Jobs}])))))
@@ -436,9 +479,9 @@
 ;;;
 ;;; If downstream proof of D uses B, then NOT (B AND D) should be avoided.
 ;;; {:psets
-;;;  [{:using :rule-5, :top-pids #{2 4}, :down-proof-pids #{7 3 9}}      
+;;;  [{:using :rule-5, :top-pids #{2 4}, :down-proof-pids #{7 3 9}}
 ;;;   {:using :rule-4, :top-pids #{1 5}, :down-proof-pids #{6 3 2}}],
-;;; :or-pairs [#{2 1} #{2 5} #{4 1} #{4 5}]}. 
+;;; :or-pairs [#{2 1} #{2 5} #{4 1} #{4 5}]}.
 ;;;
 ;;; Means remove  #{2 1} and #{2 5} from :nand-pairs (that starts as a copy of :or-pairs).
 #_(deftest test-max-sat
@@ -492,17 +535,17 @@
     (is (= #{{:model [-1], :cost 51} {:model [1], :cost 92}}
            (->> (explain '(objectiveFnVal ActualEffort) r1) :mpe (map #(dissoc % :prob)) set)))
     ;; There is only one RHS on this one [1,2,3,4] are all PIDs
-    (is (= #{{:model [ 1 -2 3 4], :cost 73} 
+    (is (= #{{:model [ 1 -2 3 4], :cost 73}
              {:model [-1 -2 3 4], :cost 73}
              {:model [-1  2 3 4], :cost 575}
-             {:model [ 1  2 3 4], :cost 1036}} 
+             {:model [ 1  2 3 4], :cost 1036}}
            (->> (explain '(allDifferent doesJob) r2) :mpe (map #(dissoc % :prob)) set)))))
 
 (deftest instance-probs (is true))
 #_(deftest instance-probs
   (testing "that conditional probabilities are calculcated correctly"
     (is true)))
-  
+
 ;;;    (is (< 0.059
 ;;;           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(cee $x1-skolem-1)])
 ;;;              (explain/cprob p-kb '(cee $x1-skolem-1)))
@@ -565,9 +608,9 @@
 ;;; Here is a problem: I don't think I should be creating assumptions until after all other RHS have created bindings.
 ;;; I currently have some code in prove-fact to collect bindings into an atom, rule-accum-subs, but that doesn't look
 ;;; like it is placed in the correct place. What it would make is a fact (py/traceVar demand demand) but I added
-;;; a 0.001 probability fact (py/traceVar ?x ?x) which stopped it. (Comment this out to continue debugging rule-assume-subs). 
+;;; a 0.001 probability fact (py/traceVar ?x ?x) which stopped it. (Comment this out to continue debugging rule-assume-subs).
 ;;; Since this is for :proof-vec, I think I'll be okay for the time being.
-;;; 
+;;;
 ;;; (def eee (explain '(ta/conceptQuery demand) (pl/compose-kb (-> "data/testing/hints/facts-2.edn" slurp read-string))))
 ;;; (->> (:all-proofs eee) bind-proven strip-proof-useless)
 ;;; {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(py/traceVar ?x ?y)
@@ -579,19 +622,19 @@
 ;;; subs= {?x-r2 demand, ?type-r4 ta/DemandType, ?x-r4 demand, ?type-r5 ta/DemandType, ?x-r5 demand, ?type-r3 ta/DemandType, ?x-r3 demand}
 ;;;       The rule would be rule-4, and it would have {?y-r4 demand} in it!
 ;;;  push-subs! works on each match (there are two). I think that is okay.
-;;;  Maybe a second stack for inside the rule??? 
+;;;  Maybe a second stack for inside the rule???
 
 (def current-bogus
      '{:rule? true,
        :rhss [{:rhs? true
-               :proven (py/traceVar demand demand),                                        ; This uses a binding between parts of the RHS. 
+               :proven (py/traceVar demand demand),                                        ; This uses a binding between parts of the RHS.
                :proofs ({:proven (py/traceVar demand $y-r4-skolem-1), :assumption? true})} ; This is an assumption unaware of thing binding
               {:rhs? true                                                                  ; Q: Why did it put the skolem on ?y rather than ?x
-               :proven (ta/simMatchVar demand ta/DemandType),                              ; A: The ?x binding came in from the head of the rule. 
+               :proven (ta/simMatchVar demand ta/DemandType),                              ; A: The ?x binding came in from the head of the rule.
                :proofs ({:proven (ta/simMatchVar demand ta/DemandType), :fact? true})}]})
 
-;;; Here is the kb I'm using in the above. 
-(defkb type-kb 
+;;; Here is the kb I'm using in the above.
+(defkb type-kb
   :rules [{:prob 0.95 :head (ta/conceptQuery ?x) :tail [(ta/conceptType ta/DemandType          ?x)]}
           {:prob 0.95 :head (ta/conceptQuery ?x) :tail [(ta/conceptType ta/WorkerType          ?x)]}
           {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(ta/conceptVar   ?type ?x)]}
@@ -600,14 +643,14 @@
           {:prob 0.80 :head (ta/conceptVar   ?type  ?x)      :tail [(ta/isType ?type) (ta/simMatchVar ?x ?type)]}
           ;; not-inv? not useful? It is hard to describe. No penalty for not meeting it???
           ]
-  :facts [{:prob 0.001 :fact (py/traceVar ?x ?x)}] ; 
+  :facts [{:prob 0.001 :fact (py/traceVar ?x ?x)}] ;
   :observations [(ta/isType ta/DemandType)
                  (ta/isType ta/WorkerType)])
 
 ;;; ================================== Testing parts of proof-generation process =======================
 (defkb ptest
   :rules [{:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-1 ?x) (p-2 ?y) (p-3 ?x ?z) (p-4 ?y ?z)]}
-          {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption. 
+          {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption.
           {:prob 0.01 :head (p-foo ?x)     :tail [(p-1 ?x)]}]
   :facts  [{:prob 0.01 :fact (p-1 x-3)}
            {:prob 0.01 :fact (p-3 x-1 ?x)}
@@ -615,16 +658,16 @@
   :observations [(p-1 x-1)
                  (p-1 x-2)
                  (p-1 x-bogo)
-                 
+
                  (p-2 y-1)
                  (p-2 y-2)
                  (p-2 y-bogo)
-                 
+
                  (p-3 x-1 z-1)
                  (p-3 x-1 z-2)
                  (p-3 x-bogo z-1)
                  (p-3 x-1 z-bogo)
-                 
+
                  (p-4 y-1 z-1)
                  (p-4 y-1 z-2)
                  (p-4 y-bogo z-1)
@@ -740,7 +783,7 @@
 
 ;;; POD There might be more to think about with respect to how I do these.
 ;;;     For example, should I treat a skolem like a cvar?
-;;; 2021-04-27 Commented out because explain/get-assumption doesn't seem to exist anymore. 
+;;; 2021-04-27 Commented out because explain/get-assumption doesn't seem to exist anymore.
 #_(deftest assumptions-are-memoized
   (testing "that you get the same assumption when you call for something similar twice."
     (is (= (explain/get-assumption proof-test-kb-1 (explain/varize '(foo ?x)))
@@ -750,7 +793,7 @@
 ;;;=============================================================================================================
 (defkb ptest
   :rules [{:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-1 ?x) (p-2 ?y) (p-3 ?x ?z) (p-4 ?y ?z)]}
-          {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption. 
+          {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption.
           {:prob 0.01 :head (p-foo ?x)     :tail [(p-1 ?x)]}]
   :facts  [{:prob 0.01 :fact (p-1 x-3)}
            {:prob 0.01 :fact (p-3 x-1 ?x)} ;<==================== Is this getting used? Should it be?
@@ -758,16 +801,16 @@
   :observations [(p-1 x-1)
                  (p-1 x-2)
                  (p-1 x-bogo)
-                 
+
                  (p-2 y-1)
                  (p-2 y-2)
                  (p-2 y-bogo)
-                 
+
                  (p-3 x-1 z-1)
                  (p-3 x-1 z-2)
                  (p-3 x-bogo z-1)
                  (p-3 x-1 z-bogo)
-                 
+
                  (p-4 y-1 z-1)
                  (p-4 y-1 z-2)
                  (p-4 y-bogo z-1)
@@ -893,8 +936,8 @@
         (as-> (-> epath slurp  read-string) ?exp
           (update-in ?exp [:kb :assumptions-used] atom)
           (assoc-in ?exp [:kb :vars]
-                    {:cost-fn      pdenno.explainlib/neg-log-cost
-                     :inv-cost-fn  pdenno.explainlib/neg-log-cost-1
+                    {:cost-fn      explainlib.core/neg-log-cost
+                     :inv-cost-fn  explainlib.core/neg-log-cost-1
                      :assumption-count (atom 0)
                      :pclause-count (atom 0)
                      :num-skolems (atom 0)})

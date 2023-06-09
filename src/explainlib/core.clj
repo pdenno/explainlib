@@ -1,4 +1,4 @@
-(ns pdenno.explainlib ; ToDo: When you remove pdenno from the classpath, this would be corel.clj.
+(ns explainlib.core
   (:require
    [clojure.core.unify           :as uni]
    [clojure.math.combinatorics   :as combo]
@@ -8,7 +8,8 @@
    [clojure.spec.alpha           :as s]
    [libpython-clj2.require :refer [require-python]]
    [libpython-clj2.python :as py :refer [py. #_#_py.. py.-]]
-   [pdenno.util                  :as util]
+   [mount.core                   :refer [defstate]]
+   [explainlib.util               :as util]
    [taoensso.timbre              :as log]))
 
 (require-python '[pysat.examples.rc2 :as rc2])
@@ -24,21 +25,21 @@
 (def diag2 (atom {}))
 (def diag  (atom {}))
 
-;;; POD ToDo: kb should disallow cycles in rules. 
+;;; POD ToDo: kb should disallow cycles in rules.
 (s/def ::neg?    boolean?)
 (s/def ::pred    (s/and seq? #(-> % first symbol?) #(>= (count %) 2)))
 (s/def ::literal (s/keys :req-un [::pred ::neg?]))
 (s/def ::clause  (s/and vector? (s/coll-of ::literal)))
-;;; BTW, the empty clause is false. (It is the identity in the monoid ({T,F} V).) 
-(s/def ::non-empty-clause  (s/and vector? (s/coll-of ::literal :min-size 1))) 
+;;; BTW, the empty clause is false. (It is the identity in the monoid ({T,F} V).)
+(s/def ::non-empty-clause  (s/and vector? (s/coll-of ::literal :min-size 1)))
 (s/def ::horn-clause     (s/and ::non-empty-clause #(<= (->> % (remove :neg?) count) 1)))
 (s/def ::definite-clause (s/and ::non-empty-clause #(== (->> % (remove :neg?) count) 1)))
 (s/def ::falsifiable     (s/and #(s/valid? ::non-empty-clause (:cnf %))
-                                 (s/keys :req-un [:cnf]) ; recalled-facts (from proofs) are like this.
+                                 (s/keys :req-un [::cnf]) ; recalled-facts (from proofs) are like this.
                                 #(== (-> % :cnf count) 1)))
 
 ;; POD Non-positional CNF will need some thought. See defn hard-clauses
-(s/def ::fact        (s/and ::falsifiable #(-> % :cnf first :neg? false?))) 
+(s/def ::fact        (s/and ::falsifiable #(-> % :cnf first :neg? false?)))
 (s/def ::ground-fact (s/and ::fact (fn [f] (not-any? #(cvar? %) (-> f :cnf first :pred)))))
 (s/def ::observation ::ground-fact)
 (s/def ::assumption  ::ground-fact)
@@ -112,7 +113,7 @@
      (list 'not (:pred lit))
      (:pred lit))))
 
-(defn rule2cnf ; This ought to be called rule2horn! 
+(defn rule2cnf ; This ought to be called rule2horn!
   "Return the CNF corresponding to the rule, a vector of literal MAPS."
   [rule]
   (reset! diag rule)
@@ -147,7 +148,7 @@
 (defn skolemize
   "Replace free variables in the form with skolem constants."
   ([kb form] (skolemize kb form {}))
-  ([kb form subs] ; Not sure what value this has any more. 
+  ([kb form subs] ; Not sure what value this has any more.
    (let [{:keys [pred neg?]} (form2lit form)
          subs (if (empty? subs) {} subs)
          pred (uni/subst pred subs)
@@ -203,10 +204,10 @@
   rules)
 
 (defn finalize-rules
-  "Augment the argument vector of rules with additional properties, 
+  "Augment the argument vector of rules with additional properties,
    returning a map indexed by a sequential name given to each rule."
   [rules]
-  (-> (reduce-kv (fn [rs k v] 
+  (-> (reduce-kv (fn [rs k v]
                    (let [suffix (name2suffix k)
                          rule (as-> v ?r
                                 (assoc  ?r :id   k)
@@ -221,12 +222,12 @@
       warn-rule-rhs-ordering))
 
 (defn finalize-facts
-  "Augment the argument vector of fact with additional properties, 
+  "Augment the argument vector of fact with additional properties,
    returning a map indexed by a sequential name given to each rule."
   [facts]
   (reduce-kv (fn [fs k v]
                (let [suffix   (name2suffix k)
-                     fact (-> v 
+                     fact (-> v
                               (assoc  :id  k)
                               (assoc  :cnf (-> v :fact form2lit vector))
                               (update :cnf #(varize % suffix))
@@ -247,7 +248,7 @@
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
    will be generated afterwards. Its facts are observations. Each observation is a ground
-   literal that will be processed through BALP to generate all proof trees." 
+   literal that will be processed through BALP to generate all proof trees."
   [name & {:keys [rules facts observations cost-fn inv-cost-fn eliminate-assumptions elimination-priority elimination-threshold]
                          :or {rules []
                               facts []
@@ -344,13 +345,13 @@
 (defn assumption-prob
   "Return an assumption probability for the argument."
   [pred-sym kb]
-  (cond (not-yet-implemented? pred-sym)               0.001  ;default-black-list-probability     
-        (black-list-pred? pred-sym)                   0.001  ;default-black-list-probability     
+  (cond (not-yet-implemented? pred-sym)               0.001  ;default-black-list-probability
+        (black-list-pred? pred-sym)                   0.001  ;default-black-list-probability
         (requires-evidence? pred-sym)                 0.01  ;default-similarity-assumption-probability ; 0.001
         (pred-names-a-rule? pred-sym kb)              0.001
-        :else                                         0.400))  
+        :else                                         0.400))
 
-(defn pclause-for-non-rule 
+(defn pclause-for-non-rule
   "Create pclauses for non-rule proof-vec steps."
   [kb proof-id step]
   (let [ground-atom (:step step)
@@ -363,7 +364,7 @@
                 (assoc :remove? true)
                 (assoc :prob 1.0)
                 (assoc :comment (cl-format nil "OB ~A" (:step step))))
-          (:fact? step) ; POD no negative facts. 
+          (:fact? step) ; POD no negative facts.
           (let [fact (some #(when (uni/unify  ground-atom (-> % :cnf first :pred)) %) facts)]
             ;#p fact
             (-> fact
@@ -461,7 +462,7 @@
 
 (defn reduce-pclause
   "Reduce the pclause's :cnf by applying evidence (See J.D. Park, 2002):
-      (1) Set :remove? true if :cnf is true based on an observation. 
+      (1) Set :remove? true if :cnf is true based on an observation.
       (2) Remove false from :cnf based evidence."
   [pclause observation-lits]
   (let [used-ev (atom [])]
@@ -480,9 +481,9 @@
 
 ;;; Questionable to use unique-clauses above because
 ;;;  (1) I don't see why the same clause arrived at through different means might still be applied.
-;;;      (But does RC2 maxsat allow that? Should I add up the cost of these?)  
+;;;      (But does RC2 maxsat allow that? Should I add up the cost of these?)
 ;;;  (2) It actually removes rather than sets :remove? true.
-;;;  HOWEVER: I have seen it remove actual duplicates. 
+;;;  HOWEVER: I have seen it remove actual duplicates.
 (defn reduce-pclauses-using-observations
   "Return a vector of maps {:prob <probability> :cnf <clause> corresponding
    to the clauses used in the proofs and their complements reduced by the evidence."
@@ -516,7 +517,7 @@
                            (:assumption? x) 2
                            (:rule? x)  3))]
     (vec
-     (sort 
+     (sort
       (fn [x y]
         (cond (and (:remove? x) (not (:remove? y)))  1,
               (and (:remove? y) (not (:remove? x))) -1,
@@ -544,7 +545,7 @@
       clauses))))
 
 (defn set-pclause-prop-ids
-  "Add a :pos key to every :pred of each :cnf of :pclauses. 
+  "Add a :pos key to every :pred of each :cnf of :pclauses.
    It indicates the proposition number for the MAXSAT analysis."
   [pclause prop-ids game]
   (update pclause :cnf
@@ -554,7 +555,7 @@
                       (if id
                         (assoc lit :pos id)
                         (throw (ex-info "Literal from pclause CNF not in prop-ids:"
-                                        {:game game :pred (:pred lit) 
+                                        {:game game :pred (:pred lit)
                                          :pclause pclause :prop-ids prop-ids})))))
                   cnf))))
 
@@ -567,12 +568,12 @@
                   (reduce into #{})
                   (sort compare-lists))]
     (zipmap lits (range 1 (-> lits count inc)))))
- 
-;;; This is useful for unifying the tail of a rule with (1) kb, or 
+
+;;; This is useful for unifying the tail of a rule with (1) kb, or
 ;;; (2) propositions from proofs used in the cnf of 'NOT rules'."
-(defn match-form-to-facts 
-  "Return a vector of substitutions of all ground-facts (predicate forms) 
-   into the argument that (completely) unifies the form" 
+(defn match-form-to-facts
+  "Return a vector of substitutions of all ground-facts (predicate forms)
+   into the argument that (completely) unifies the form"
   [form facts]
   (reduce (fn [subs gf]
             (if-let [s (uni/unify form gf)]
@@ -585,7 +586,7 @@
   "Return true if the values for all keys in m1 match those in m2
    or m2 does not contain the key. Checks in both directions"
   [m1 m2]
-  (and 
+  (and
    (every? #(or (not (contains? m2 %))
                 (= (get m1 %) (get m2 %)))
            (keys m1))
@@ -613,7 +614,7 @@
          (filter identity))))
 
 (defn query-cform
-  "Return a vector of maps of instantiations cform (:form) and substitions used 
+  "Return a vector of maps of instantiations cform (:form) and substitions used
    (:subs) from unifying the argument cform (vector of predicates with free
    variables) with ground-facts."
   [cform ground-facts]
@@ -690,7 +691,7 @@
            cnt 0]
       (if (< cnt ntimes)
         (if-let [answer (py. rc2 compute)]
-            (do (py. rc2 add_clause (mapv #(- %) answer)) ; Blocking is a mutation on rc2. 
+            (do (py. rc2 add_clause (mapv #(- %) answer)) ; Blocking is a mutation on rc2.
                 (recur (conj result {:model answer :cost (py/get-attr rc2 "cost")})
                        (inc cnt)))
             result)
@@ -700,14 +701,13 @@
   "Query any active app-gateway to run an RC2 MAXSAT problem. Return the :result."
   [{:keys [wdimacs z-vars prop-ids proof-vecs]}]
   (try
-    (let [prom (promise) ; POD NYI
-          results (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40)
+    (let [results (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40)
           z-set (set (into z-vars (map - z-vars)))]
       (mapv (fn [indv]
               (as-> indv ?i
                 (assoc ?i :proof-id (model2proof-id (remove #(z-set %) (:model indv)) prop-ids proof-vecs))
                 (assoc ?i :pvec (-> (get proof-vecs (:proof-id ?i)) :pvec))
-                (dissoc ?i :model)))
+                (dissoc ?i :model))) ; pvec has all the info of model
             results))
     (catch Throwable _ (log/error "Problem running MAXSAT."))))
 
@@ -719,7 +719,7 @@
        :cnf
        (mapv (fn [{:keys [neg? pos]}] (if neg? (- pos) pos)))))
 
-(defn one-clause-wdimacs 
+(defn one-clause-wdimacs
   "Return the argument pclause with :wdimacs set.
    WDIMACS-style MAXSAT penalizes instantiations that violate the
    (disjunctive) clause. The instance must disagree on ALL variables
@@ -779,7 +779,7 @@
               valus (reduce (fn [vs ix] (cond (tuple ix)     (conj vs ix)
                                               (tuple (- ix)) (conj vs (- ix))
                                               :else (conj vs " ")))
-                            [] 
+                            []
                             (range 1 (inc (last zids))))]
           (swap! wdimacs-string str (cl-format nil "~7A~{~5d~}~%" hard-cost (conj valus 0)))))
       (doseq [clause clause-vecs]
@@ -789,7 +789,7 @@
      :n-hclauses (count clause-vecs)
      :n-vars (last zids)}))
 
-;;; (proof-vec-hard-one-clause-wdimacs bbb) ; BTW, provide a proof of this approach. 
+;;; (proof-vec-hard-one-clause-wdimacs bbb) ; BTW, provide a proof of this approach.
 (defn proof-vec-hard-clause-wdimacs
   "Create the wdimacs string for hard clauses using a Tseitin-like transformation
    to avoid an exponential number of clauses.
@@ -800,7 +800,7 @@
          requiring no more than one solution to be true.
      (3) num-props clauses that require either the proposition to be false or some solution not containing
          the proposition to be true. (Encoded as an IF statement. Thus PROP OR any Z not containing prop.)
-     (4) roughly num-props clauses that require that if the proposition is true, then so is every solutions using it. 
+     (4) roughly num-props clauses that require that if the proposition is true, then so is every solutions using it.
          ('IF prop then Z' written as -prop V Z) "
   [kb]
   (let [pids      (:prop-ids kb)
@@ -819,14 +819,14 @@
         type-1    zids
         type-2    (mapv   (fn [[x y]] (vector (- x) (- y))) (combo/combinations zids 2))
         type-3    (->> (mapv (fn [prop-id] (conj (z-not-using (pids-1 prop-id) prop2z) prop-id))  prop-ids)
-                       (mapv (fn [vec] (sort vec)))    
+                       (mapv (fn [vec] (sort vec)))
                        (sort-by first))
         type-4    (->> (map (fn [prop-id] (conj (z-using (pids-1 prop-id) prop2z) (- prop-id))) prop-ids)
                        (mapv (fn [vec] (sort-by #(Math/abs %) vec)))
                        (sort-by #(-> % first Math/abs)))
         clause-vecs (-> (vector type-1) (into type-2) (into type-3) (into type-4))]
     (hard-clause-wdimacs kb clause-vecs)))
-        
+
 (defn wdimacs-string
   "Create the wdimacs problem (string) from the pclauses and the hard-conjunction.
    How to read the string: instances that are exact opposites acquire the penalty."
@@ -835,7 +835,7 @@
         {:keys [h-wdimacs
                 hard-cost
                 n-hclauses
-                n-vars]} (proof-vec-hard-clause-wdimacs kb) 
+                n-vars]} (proof-vec-hard-clause-wdimacs kb)
         p-wdimacs (cond->> (map #(one-clause-wdimacs kb % :commented? commented?) pclauses)
                     commented? (map (fn [num line] (cl-format nil "~2A: ~A" num line))
                                     (range 1 (-> pclauses count inc))))
@@ -887,7 +887,7 @@
   "Return vectors of vectors of 'path-maps' that result from navigating each proof and collecting what is asserted.
    Each path-map has a :step that describes one step in the naviatation.
    [[{:step <a ground atom> :rule? true}...],...,[{:step <a ground atom>...}...]]
-  
+
    When, in the naviagation, a 'role' can be achieved by multiple assertions, the path is duplicated,
    one for each role-filler, and navigation continues for each new path individually.
    The nodes (:step) navigated are 'heads' 'observations' 'facts' and 'assumptions'."
@@ -929,17 +929,6 @@
   "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that
    are used as assumptions."
   [kb pvecs]
-  (when-let [elim (not-empty (-> kb :eliminate-assumptions))]
-    (let [start-count (count pvecs)
-          eliminate? (set elim)
-          result (remove (fn [pvec] (some #(and (:assumption? %) (eliminate? (-> % :step first))) pvec)) pvecs)]
-      (log/info "Removed" (- start-count (count result)) "proofs with assumptions" elim)
-      result)))
-
-#_(defn winnow-regardless
-  "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that
-   are used as assumptions."
-  [kb pvecs]
   (if-let [elim (not-empty (-> kb :eliminate-assumptions))]
     (let [start-count (count pvecs)
           eliminate? (set elim)
@@ -947,7 +936,7 @@
       (log/info "Removed" (- start-count (count result)) "proofs with assumptions" elim)
       result)
     pvecs))
-  
+
 ;;;   The set is winnowed down to the
 ;;;   kb's :elimination-threshold by selectively removing members that contains
 ;;;   assumptions from the :elimination-order. :no-kb-tasks is for debugging.
@@ -977,7 +966,7 @@
          (reduce (fn [res pv] (assoc res (:proof-id pv) pv)) {}))))
 
 (defn collect-proof-vecs
-  "Collect vectors describing how each proof navigates :raw-proofs to some collection of 
+  "Collect vectors describing how each proof navigates :raw-proofs to some collection of
    grounded LHSs, facts and assumptions.
    The :steps is a depth-first navigation of the proof: each form of the rhs of the of a rule
    is expanded completely onto :steps before moving expanding the next form of the rhs."
@@ -1001,13 +990,13 @@
       (throw (ex-info "No proof vecs remaining." {})))
     (swap! diag2 #(assoc % :proof-vecs result))
     result))
-  
+
 ;;;=================================================================================================
 ;;;======================  Proof Generation  =======================================================
 ;;;=================================================================================================
-;;; Starting at the top-level :prv (the :query) : 
+;;; Starting at the top-level :prv (the :query) :
 ;;;   1) Use the query and bindings from the LHS to create tailtab.
-;;;   2) Create the cartesian product of the relevant data. 
+;;;   2) Create the cartesian product of the relevant data.
 ;;;   3) Loop through:
 ;;;       a) Create the transducer (for a rule).
 ;;;       b) Run it on its rule-product.
@@ -1041,7 +1030,7 @@
     (and (reduce (fn [still-true? [m1 m2]]
                    (if (not still-true?) false
                        (let [common-keys (filter #(contains? m2 %) (keys m1))]
-                         (every? #(let [m1-val (get m1 %)  
+                         (every? #(let [m1-val (get m1 %)
                                         m2-val (get m2 %)]
                                     (or #_(cvar? m1-val)
                                         #_(cvar? m2-val)
@@ -1054,15 +1043,15 @@
 (defn filter-rule-product-transducer
   "If not provided with data, return a transducer that can be run on a lazy-seq etc.
    to filter out tuples that don't consistently bind to the rule's RHS.
-   With data (for debugging), it runs that filter."  
-  [tail & {:keys [data]}] ; data for debugging. 
+   With data (for debugging), it runs that filter."
+  [tail & {:keys [data]}] ; data for debugging.
   (if data
     (filter #(consistent-bindings? % tail) data)
     (filter #(consistent-bindings? % tail))))
-  
+
 (defn tailtab
   "For each rule in which the head binds with the query, create a map indexed by the predicate symbols
-   of tails of rules whose head unifies with the argument query. The map values substitute bindings of 
+   of tails of rules whose head unifies with the argument query. The map values substitute bindings of
    the unification into the predicates of the tail."
   [kb query]
   (let [cnt (atom 0)]
@@ -1094,7 +1083,7 @@
 (defn complete-bindings
   "The Cartesian product created by rule-product can produce binding setst that are not complete. For example:
    ((py/linkBack demand Demand) (ta/conceptRefScheme ta/DemandType demand) (ta/conceptVar ta/DemandType demand) (ta/conceptDF ta/DemandType ?y-r2))
-   Where the first predicate here binds ?y-r2 to demand. This function returns these predictes (a RHS) with all variables bound."  
+   Where the first predicate here binds ?y-r2 to demand. This function returns these predictes (a RHS) with all variables bound."
   [tail preds]
   (let [bindings (uni/unify preds tail)]
     (if bindings
@@ -1119,11 +1108,11 @@
                          ;;#p pred-sym
                          (->> (update plustab rt-key
                                       into
-                                      (reduce (fn [res lit] ; lit is really a predicate form. 
+                                      (reduce (fn [res lit] ; lit is really a predicate form.
                                                 (if (ground? lit)
                                                   res
                                                   (into res
-                                                        (filter #(uni/unify lit %) 
+                                                        (filter #(uni/unify lit %)
                                                                 (consistent-cvar-naming
                                                                  kb rule-id ix (get datatab (first lit)))))))
                                               []
@@ -1145,7 +1134,7 @@
    Thus it provides 'one step' of a proof." ; POD I don't think prv needs to be ground
   [kb prv]
   (let [tailtab (tailtab kb prv)]
-    (as-> (reduce (fn [res rule-id] 
+    (as-> (reduce (fn [res rule-id]
                     (let [tail (-> kb :rules rule-id :tail)]
                       (assoc res rule-id
                              (into [] (filter-rule-product-transducer tail)
@@ -1172,7 +1161,7 @@
                  ?pset-maps))))
 
 (def scope-debugging? false)
-(def binding-stack (atom '())) 
+(def binding-stack (atom '()))
 (defn reset-scope-stack [] (reset! binding-stack '()))
 
 (defmacro dbg-scope
@@ -1180,7 +1169,7 @@
   `(when scope-debugging?
      (println (util/nspaces (* 4 (dec (count @binding-stack)))) ~@args)))
 
-(defn push-scope 
+(defn push-scope
   "Push the bindings on the top of the stack. Returns the argument."
   [bindings]
   (swap! binding-stack conj bindings)
@@ -1237,7 +1226,7 @@
 (defn fact-solve?
   "Return a list of facts if the argument can be proved by reference to a fact."
   [kb prv]
-  (->> kb 
+  (->> kb
        :facts
        vals
        (map #(-> % :cnf first lit2form))
@@ -1249,7 +1238,7 @@
        not-empty))
 
 (defn add-assumption
-  "Find a kb assumption that will unify with form, or create a new one 
+  "Find a kb assumption that will unify with form, or create a new one
    and add it to the (:assumptions-used kb) atom."
   [kb form]
   (if-let [subs (some #(uni/unify form %) (-> kb :assumptions-used deref vals))]
@@ -1262,7 +1251,7 @@
       skol)))
 
 (defn prv-with-rule-vars
-  "Return prv (the current goal in the proof) with var names as 
+  "Return prv (the current goal in the proof) with var names as
    required by the rule to be applied and values undisturbed."
   [prv rule sol]
   (when-not (= (first prv) (-> rule :head first))
@@ -1274,8 +1263,8 @@
     (uni/subst lhs subs)))
 
 (defn consistent-call?
-  "RHS of caller could have multiple calls to the same predicate. One should have bindings 
-   tht match the bindings of the called." 
+  "RHS of caller could have multiple calls to the same predicate. One should have bindings
+   tht match the bindings of the called."
   [call-info]
   ;(swap! diag conj call-info) ; very useful!
   (if (:caller call-info)
@@ -1284,7 +1273,7 @@
           ;; {} is a perfect match on ground, not a failure!
           equiv-var-map (->> (uni/unify (-> call-info :caller :sol) (-> call-info :called :lhs))
                              (reduce-kv (fn [res k v] (if (cvar? v) (assoc res k v) res)) {}))]
-      ;; Bindings must match if both are bound. 
+      ;; Bindings must match if both are bound.
       (every? (fn [[caller-var called-var]]
                 (if (and (contains? caller-binds caller-var)
                          (contains? called-binds called-var)) ; POD need I check that the called has more bindings?
@@ -1335,7 +1324,7 @@
                                                         rule-result (as-> {} ?r
                                                                         (assoc ?r :rule-used? true)
                                                                         (assoc ?r :rule-used rule-id)
-                                                                        (assoc ?r :proving prv-renamed) 
+                                                                        (assoc ?r :proving prv-renamed)
                                                                         (assoc ?r :rhs-queries sol) ; POD problem here that each component might be in a
                                                                         (assoc ?r :decomp
                                                                                (doall (mapv (fn [prv]
@@ -1439,8 +1428,8 @@
     (assoc ?game-kb :prop-ids (get-prop-ids (:proof-vecs ?game-kb)))
     (assoc ?game-kb :pclauses
            (reduce (fn [res pf-id]
-                     (into res (filter #((:used-in %) pf-id)) (:pclauses kb))) 
-                   #{} ; A set or you will get one copy for every proof in which the clause is used. 
+                     (into res (filter #((:used-in %) pf-id)) (:pclauses kb)))
+                   #{} ; A set or you will get one copy for every proof in which the clause is used.
                    game))
     (update ?game-kb :pclauses (fn [pcs] (mapv #(set-pclause-prop-ids
                                                  % (:prop-ids ?game-kb) game)
@@ -1455,10 +1444,10 @@
         (update ?g2 :pclauses sort-clauses)
         (assoc  ?g2 :wdimacsc (wdimacs-string ?g2 :commented? true)))
       ?game-kb)))
-  
+
 (def ngames-played (atom 0))
 
-(defn run-one 
+(defn run-one
   ":pclauses has been prepared to run the MAXSAT problem (except for setting pids and :cnf).
    Create the wdimacs and run python-maxsat, setting :mpe."
   [kb game & {:keys [pretty-analysis?]}]
@@ -1488,12 +1477,12 @@
    (e.g. ones that disagree with expectations)."
   [kb game-size num-kept]
   (let [game-groups (random-games (-> kb :proof-vecs keys) game-size)]
-    (loop [groups game-groups 
+    (loop [groups game-groups
            result {:winners #{}
                    :losers  #{}}]
       (if (empty? groups)
         result
-        (let [game (first groups) ; A 'game' is a collection proof-ids. 
+        (let [game (first groups) ; A 'game' is a collection proof-ids.
               kb (info-for-game kb game)] ; POD was (merge kb (info-for-game kb game))
           ;(log/info "Running game" game)
           (recur (rest groups)
@@ -1519,7 +1508,7 @@
             (let [{:keys [winners losers]} (run-games kb game-size num-kept)]
               (log/info "Round" round "Winner count:" (count winners))
               (recur
-               (-> res 
+               (-> res
                    (assoc :winners winners)
                    ;; POD not exactly the right place to pick up losers, but okay, I think.
                    (update :losers (fn [loo]
@@ -1557,7 +1546,7 @@
          :or {max-together 10,
               game-size 10,
               num-kept 5
-              final-size 15 ; 20 runs up to 20 seconds. 
+              final-size 15 ; 20 runs up to 20 seconds.
               loser-fn identity}}]
   {:pre [(>= game-size 2) (< num-kept game-size)]}
   (reset! ngames-played 0)
@@ -1574,7 +1563,7 @@
   [pclauses]
   (mapv (fn [pc] (update pc :comment #(str (name (:id pc)) " " %)))
         pclauses))
-          
+
 ;;; (explain '(p-lhs x-1 y-1) ptest)
 ;;;======================================= Toplevel =========================================
 (defn explain
@@ -1585,7 +1574,7 @@
     (as->  kb ?kb
       (finalize-kb ?kb query)
       (clear! ?kb)
-      (assoc  ?kb :datatab         (datatab ?kb)) 
+      (assoc  ?kb :datatab         (datatab ?kb))
       (assoc  ?kb :raw-proofs      (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}}))
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
       (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
@@ -1611,19 +1600,31 @@
         (cl-format stream "~A" (or (:wdimacsc kb) (:wdimacs kb)))
         (cl-format stream "~A" (:wdimacs  kb))))))
 
-(defn report-solution
-  "Print an interpretation of a solution."
+(defn report-solutions
+  "Print an interpretation of the solutions."
+  [kb stream & {:keys [solution-number] :or {solution-number 0}}]
+  (reset! diag kb)
+  (if (> (-> kb :mpe count) solution-number)
+    (doseq [sol (:mbe kb)]
+      (cl-format stream "~%Cost ~3d: ~A~%" (:pvec sol)))
+      ;; No solutions, so just show p-inv
+    (cl-format stream "No solution.~2%~{~A~%~}"
+               (->> :prop-ids clojure.set/map-invert vec (sort-by first))))
+  true)
+
+#_(defn report-solution
+  "Print an interpretation of the solutions."
   [kb stream & {:keys [solution-number] :or {solution-number 0}}]
   (if (> (-> kb :mpe count) solution-number)
     (let [sol (-> kb :mpe (nth solution-number))
           p-inv (-> kb :prop-ids clojure.set/map-invert)]
       (cl-format stream "~2%Cost: ~A~%" (:cost sol))
-      (doall
-       (for [n (:model sol)]
-         (cl-format stream "~3d ~5A ~A~%" n (pos? n) (get p-inv (Math/abs n)))))
+      (doseq [s (:model sol)] ; No more model
+         (cl-format stream "~3d ~5A ~A~%" n (pos? n) (get p-inv (Math/abs n))))
       ;; No solutions, so just show p-inv
       (cl-format stream "~2%~{~A~%~}" (->> p-inv vec (sort-by first))))
   true))
+
 
 (defn report-prop-ids
   [kb stream]
@@ -1631,12 +1632,12 @@
 
 (defn report-scores
   [kb stream]
-  (doall (for [sol (:mpe kb)]
-           (let [;fail-info (fail-list kb (:model sol))
-                 #_info-strings #_(map #(cl-format nil "~A:[~{~A~^ ~}]" (:cid %) (:pids %)) fail-info)]
-             (cl-format stream "~%:cost ~5d :true ~A"
-                        (:cost  sol)
-                        (->> sol :proof-set (sort-by first)))))))
+  (doseq [sol (:mpe kb)]
+    (let [;fail-info (fail-list kb (:model sol))
+          #_info-strings #_(map #(cl-format nil "~A:[~{~A~^ ~}]" (:cid %) (:pids %)) fail-info)]
+      (cl-format stream "~%:cost ~5d :true ~A"
+                 (:cost  sol)
+                 (->> sol :proof-set (sort-by first))))))
 
 (defn name2num
   "Return the number n of :fact-n or :rule-n."
@@ -1646,15 +1647,16 @@
 
 (defn report-kb
   [kb stream]
-  (doall (for [rule (->> kb :rules vals (sort-by #(name2num (:id %))))]
-           (cl-format stream "~%~5,3f ~8A :: ~A :- ~{~A ~}"
-                      (:prob rule) (:id rule) (:head rule) (:tail rule))))
-  (doall (for [fact (->> kb :facts vals (sort-by #(name2num (:id %))))]
-           (cl-format stream "~%~5,3f ~9A :: ~A"
-                      (:prob fact) (:id fact) (-> fact :cnf first lit2form))))
-  (doall (for [assum (->> (-> kb :assumptions-used deref) (sort-by #(name2num (:id %))))]
-           (cl-format stream "~%~5,3f ~9A :: ~A"
-                      (:prob assum) (:id assum) (-> assum :cnf first lit2form))))
+  (doseq [rule (->> kb :rules vals (sort-by #(name2num (:id %))))]
+    (cl-format stream "~%~5,3f ~8A :: ~A :- ~{~A ~}"
+               (:prob rule) (:id rule) (:head rule) (:tail rule)))
+  (doseq [fact (->> kb :facts vals (sort-by #(name2num (:id %))))]
+    (cl-format stream "~%~5,3f ~9A :: ~A"
+               (:prob fact) (:id fact) (-> fact :cnf first lit2form)))
+  ;; ToDo: Bug here on (report-results (explain '(blocked-road plaza) et/blocked-road-kb))
+  #_(doseq [assum (->> (-> kb :assumptions-used deref) (sort-by #(name2num (:id %))))]
+      (cl-format stream "~%~5,3f ~9A :: ~A"
+                 (:prob assum) (:id assum) (-> assum :cnf first lit2form)))
   (cl-format *out* "~{~%~A~}" (:observations kb))
   true)
 
@@ -1665,16 +1667,16 @@
   (if (-> kb :mpe keyword?)
     (:mpe kb)
     (do
-      (report-problem  kb stream)
-      (report-solution kb stream)
-      (report-prop-ids kb stream)
-      (report-scores   kb stream)
-      (report-kb       kb stream))))
+      (report-problem   kb stream)
+      (report-solutions kb stream)
+      (report-prop-ids  kb stream)
+      (report-scores    kb stream)
+      (report-kb        kb stream))))
 
 ;;; (query-proofs (:proof-vecs fff) '[(ta/conceptType ta/DemandType nWorkers)])
 ;;; (query-proofs (:proof-vecs fff) '[(ta/conceptType ta/WorkerType nWorkers) (ta/simMatchVar nWorkers ta/WorkerType)])
 (defn query-proofs
-  "Return proof-ids of proof-vecs that contain the query. It uses uni/unify. 
+  "Return proof-ids of proof-vecs that contain the query. It uses uni/unify.
    Example (query-proof (:proof-vecs kb) '(ta/conceptType ta/DemandType demand)).
    Note that the queries argument is a collection but the not-queries are not."
   [proof-vecs queries & not-queries]
@@ -1707,3 +1709,18 @@
               (range run-times))
       (update :in-final frequencies)
       (update :won frequencies)))
+
+(defn start-explainlib
+  "Call to py/initialize! and whatever else..."
+  []
+  (py/initialize!))
+
+(defstate explainlib
+  :start (start-explainlib))
+
+;;; Temporary testing stuff
+;;;(report-results (explain-observation '(alarm plaza) test/alarm-kb))
+;;;(report-results (explain-observation '(blocked-road plaza) test/blocked-road-kb))
+;;;(report-results (explain-observation '(groupby Table-1 COLA COLB) test/job-kb))
+;;;(report-results (explain-observation '(objectiveFnVal CostTable) rule/r1))
+;;;(report-results (explain-observation '(objectiveFnVal ActualEffort) rule/r1))

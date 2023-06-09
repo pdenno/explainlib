@@ -1,16 +1,18 @@
 {:paths ["src" "resources"]
- :mvn/repos {"central" {:url "https://repo1.maven.org/maven2/"}
-             "clojars" {:url "https://clojars.org/repo"}}
+ #_#_:mvn/repos {"central" {:url "https://repo1.maven.org/maven2/"}
+                 "clojars" {:url "https://clojars.org/repo"}}
  :deps {clj-python/libpython-clj       {:mvn/version "2.024"}
         com.taoensso/timbre            {:mvn/version "6.1.0"}
         cprop/cprop                    {:mvn/version "0.1.19"}
+        mount/mount                    {:mvn/version "0.1.17"}
         org.clojure/core.unify         {:mvn/version "0.5.7"}
-        org.clojure/math.combinatorics {:mvn/version "0.2.0"}
-        #_#_org.clojure/data.csv           {:mvn/version "0.1.4"}}
+        org.clojure/math.combinatorics {:mvn/version "0.2.0"}}
  :aliases
- ;; :jdk-17 See https://github.com/clj-python/libpython-clj/issues/180 for mac
- {:jdk-17 {:jvm-opts ["--add-modules" "jdk.incubator.foreign"
-                      "--enable-native-access=ALL-UNNAMED"]}
+ {:dev  {:extra-paths ["env/dev" "test"]
+         #_#_:repl-options {:init-ns my-py-clj.config}
+         :extra-deps  {expound/expound                 {:mvn/version "0.9.0"} ; more readable spec messages
+                       com.lambdaisland/classpath      {:mvn/version "0.4.44"}
+                       org.clojure/tools.namespace     {:mvn/version "1.4.4"}}}
   :test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "0.10.0"}}}
   :runner

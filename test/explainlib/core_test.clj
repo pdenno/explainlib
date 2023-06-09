@@ -251,6 +251,11 @@
               {:cost 636, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
              (-> (explain '(D foo) abcd2-kb) :mpe))))))
 
+;;; Todo: Investigate this:  WARN [explainlib.core:203] - Rule :rule-2 has rule-rhs before rule data.
+;;;       This is reported if I switch the order of the predicates in the second rule to
+;;;       [(wear ?robot ?joint) (backlash-sim ?robot ?joint)].
+;;;       It doesn't change the results in this case, so I wonder whether it is legit test.
+;;;       If it is, why not just reorder them automatically?
 ;;; (explain '(inaccurate-tcp robot-8) et/mfglet-kb)
 (defkb mfglet-kb
   :rules [{:prob 0.4
@@ -258,7 +263,7 @@
            :tail [(stressed ?robot ?joint)]}
           {:prob 0.8
            :head (inaccurate-tcp ?robot)
-           :tail [(wear ?robot ?joint) (backlash-sim ?robot ?joint)]}
+           :tail [(backlash-sim ?robot ?joint) (wear ?robot ?joint)]}
           {:prob 0.7
            :head (inaccurate-tcp ?robot)
            :tail [(failing-sensor ?robot ?joint)
@@ -268,6 +273,12 @@
           {:prob 0.8 :fact (backlash-sim robot-8 joint-2)}
           {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
           {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
+
+(deftest mfglet-example
+  (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
+    (is (= [{:cost 439, :proof-id :proof-1, :pvec '((backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2))}
+            {:cost 813, :proof-id :proof-2, :pvec '((failing-sensor robot-8 joint-2) (bad-sensor-processing robot-8))}]
+           (-> (explain '(inaccurate-tcp robot-8) mfglet-kb) :mpe)))))
 
 ;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
 ;;; [(accident plaza) 1]

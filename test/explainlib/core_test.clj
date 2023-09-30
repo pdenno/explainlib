@@ -274,6 +274,7 @@
           {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
           {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
 
+
 (deftest mfglet-example
   (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
     (is (= [{:cost 439, :proof-id :proof-1, :pvec '((backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2))}

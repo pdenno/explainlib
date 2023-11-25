@@ -1,4 +1,5 @@
 *~
+*#
 *.iml
 *.log
 *.sw?
@@ -13,4 +14,5 @@ classes
 compiled
 target
 .cpcache
-.clj-kondo/.cache
+.clj-kondo/
+.lsp/

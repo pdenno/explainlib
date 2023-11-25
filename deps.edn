@@ -1,35 +1,30 @@
-{:paths ["src" "resources"]
- #_#_:mvn/repos {"central" {:url "https://repo1.maven.org/maven2/"}
-                 "clojars" {:url "https://clojars.org/repo"}}
- :deps {clj-python/libpython-clj       {:mvn/version "2.024"}
-        com.taoensso/timbre            {:mvn/version "6.1.0"}
+{:paths ["src"]
+
+ :deps {clj-python/libpython-clj       {:mvn/version "2.025"}
+        com.taoensso/timbre            {:mvn/version "6.3.1"}
         cprop/cprop                    {:mvn/version "0.1.19"}
-        mount/mount                    {:mvn/version "0.1.17"}
+        mount/mount                    {:mvn/version "0.1.17"} ; Probably should only be in dev, but it does (py/initialize!)
         org.clojure/core.unify         {:mvn/version "0.5.7"}
-        org.clojure/math.combinatorics {:mvn/version "0.2.0"}}
- :aliases
- {:dev  {:extra-paths ["env/dev" "test"]
-         #_#_:repl-options {:init-ns my-py-clj.config}
-         :extra-deps  {expound/expound                 {:mvn/version "0.9.0"} ; more readable spec messages
-                       com.lambdaisland/classpath      {:mvn/version "0.4.44"}
-                       org.clojure/tools.namespace     {:mvn/version "1.4.4"}}}
-  :test {:extra-paths ["test"]
-         :extra-deps {org.clojure/test.check {:mvn/version "0.10.0"}}}
-  :runner
-  {:extra-deps {com.cognitect/test-runner
-                {:git/url "https://github.com/cognitect-labs/test-runner"
-                 :sha "7284cda41fb9edc0f3bc6b6185cfb7138fc8a023"}}
-   :main-opts ["-m" "cognitect.test-runner"
-               "-d" "test"]}}}
+        org.clojure/math.combinatorics {:mvn/version "0.2.0"}
+        org.slf4j/slf4j-nop            {:mvn/version "2.0.7"}}  ; Stop spurious logging!}
+
+ :aliases  {:dev  {:extra-paths ["env/dev" "test"]
+                   :extra-deps  {expound/expound                 {:mvn/version "0.9.0"} ; more readable spec messages
+                                 com.lambdaisland/classpath      {:mvn/version "0.4.44"}
+                                 org.clojure/tools.namespace     {:mvn/version "1.4.4"}}}
+
+            :test {:extra-paths    ["test" "env/dev"]
+                   :main-opts      ["-m" "kaocha.runner"]
+                   :extra-deps     {lambdaisland/kaocha          {:mvn/version "1.87.1366"}
+                                    ;; Since I'm running from the command line, bin/koacha, need to repeat these.
+                                    com.lambdaisland/classpath      {:mvn/version "0.4.44"}
+                                    org.clojure/tools.namespace  {:mvn/version "1.4.4"}}}
+
+            :build    {:deps {io.github.clojure/tools.build {:mvn/version "0.9.6"}}
+                       :ns-default build}}}
 
 ;;; clj -T:search/outdated
-;;; |    :file |                          :name |                                 :current |                                  :latest |
-;;; |----------+--------------------------------+------------------------------------------+------------------------------------------|
-;;; | deps.edn |       clj-python/libpython-clj |                                    2.003 |                                    2.024 |
-;;; |          |      com.cognitect/test-runner | f7ef16dc3b8332b0d77bc0274578ad5270fbfedd | 7284cda41fb9edc0f3bc6b6185cfb7138fc8a023 |
-;;; |          |            com.taoensso/timbre |                                    5.1.2 |                                    6.1.0 |
-;;; |          |            org.clojure/clojure |                                   1.10.3 |                                   1.11.1 |
-;;; |          | org.clojure/math.combinatorics |                                    0.1.6 |                                    0.2.0 |
-;;; |          |         org.clojure/test.check |                                   0.10.0 |                                    1.1.1 |
-;;; |          |           seancorfield/depstar |                     seancorfield/depstar |          com.github.seancorfield/depstar |
-;;; |          |           seancorfield/depstar |                                    0.5.1 |                                  2.0.216 |
+;;; |    :file |                    :name | :current | :latest |
+;;; |----------+--------------------------+----------+---------|
+;;; | deps.edn | clj-python/libpython-clj |    2.024 |   2.025 |
+;;; |          |      com.taoensso/timbre |    6.1.0 |   6.3.1 |

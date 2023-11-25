@@ -1,24 +1,41 @@
 (ns build
-  "This file by POD for a local build."
-  (:require [clojure.tools.build.api :as b]
-            [org.corfield.build :as bb]))
+  (:require
+   [clojure.tools.build.api :as b]))
 
-;;; https://github.com/seancorfield/build-clj
-(def lib 'pdenno/explainlib)
-;; if you want a version of MAJOR.MINOR.COMMITS:
-;;; POD git rev-list --count HEAD
-(def version (format "0.1.%s" (b/git-count-revs nil)))
+;;; I'm not sure this will even work, given the python dependencies.
+;;; See also https://clojure.org/guides/tools_build
+;;; To install jar: clj -T:build all
 
-;;; (build-jar {:lib lib :version version})
-(defn build-jar "Run the CI pipeline of tests (and build the JAR)." [opts]
-  (-> opts
-      (assoc :lib lib :version version)
-      ;(bb/run-tests)
-      (bb/clean)
-      (bb/jar)))
+(def lib 'com.github.pdenno/explainlib)
+(def version (format "1.0.%s" (b/git-count-revs nil)))
+(def class-dir "target/classes")
+(def basis (b/create-basis {:project "deps.edn"}))
+(def jar-file (format "target/%s-%s.jar" (name lib) version))
+(def target-dir "target")
 
-;;; (install-jar {})
-(defn install "Install the JAR locally." [opts]
-  (-> opts
-      (assoc :lib lib :version version)
-      (bb/install)))
+(defn clean [_]
+  (println "Doing the clean")
+  (b/delete {:path "target"}))
+
+(defn prep [_]
+  (println "Writing the pom.")
+  (b/write-pom {:class-dir class-dir
+                :lib lib
+                :version version
+                :basis basis
+                :src-dirs ["src"]})
+  (b/copy-dir {:src-dirs ["src"] :target-dir class-dir}))
+
+(defn jar [_]
+  (println "Building the jar.")
+  (b/jar {:class-dir class-dir :jar-file jar-file}))
+
+
+;;; :basis - required, used for :mvn/local-repo
+(defn install [_]
+  (println "Installing: class-dir =" class-dir "version = " version)
+  (let [opts {:lib lib :basis basis :jar-file jar-file :class-dir class-dir :version version}]
+    (b/install opts)))
+
+(defn all [_]
+  (-> nil clean prep jar install))

@@ -909,11 +909,11 @@
 (deftest proof-prop-sets
   (testing "that proof-prop-sets are constructed correctly"
     (is (=  (-> "data/testing/proofs/whole-results.edn" slurp read-string)
-            (explain/walk-rules (-> "data/testing/proofs/whole-proof.edn" slurp read-string explain/varize))))
+            (->> (explain/walk-rules (-> "data/testing/proofs/whole-proof.edn" slurp read-string explain/varize)) (mapv #(mapv :step %)))))
     (is (= '[[(top-level 1 2 3) (second-level foo) (b 0)] [(top-level 1 2 3) (second-level foo) (third-level bar) (fourth-level baz) (d 1) (e 2) (f 3)]]
-           (explain/walk-rules small)))
+           (->> (explain/walk-rules small) (mapv #(mapv :step %)))))
     (is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]
-           (explain/walk-rules tiny)))))
+           (->> (explain/walk-rules tiny) (mapv #(mapv :step %)))))))
 
 ;;;-------------- Medium-sized experiments of complete MPE functionality --------
 (defn interesting-loser-fn

@@ -900,8 +900,8 @@
           (walk-rule [rule path]
             (let [rule-id (:rule-used rule)
                   lhs (:proving rule)]
-              (when-not (ground? lhs)
-                (throw (ex-info "Predicate is not ground" {:rule rule :path path})))
+              #_(when-not (ground? lhs) ; 2023-11-25 commented out. core_test (explain/walk-rules tiny)
+                (throw (ex-info "Predicate is not ground (1)" {:rule rule :path path})))
               (loop [roles (:decomp rule)
                      new-paths (vector (conj path {:step lhs :rule? true :rule-id rule-id}))]
                 (if (empty? roles)
@@ -916,14 +916,13 @@
                          (do
                            (when-not (ground? (:prvn rhs-proof))
                              ;(reset! diag {:prvn (:prvn rhs-proof)})
-                             (throw (ex-info "Predicate is not ground" {:prvn (:prvn rhs-proof) :rhs-proof rhs-proof})))
+                             (throw (ex-info "Predicate is not ground (2)" {:prvn (:prvn rhs-proof) :rhs-proof rhs-proof})))
                            (swap! result conj (conj old-path (-> {}
                                                                  (assoc :step (:prvn rhs-proof))
                                                                  (assoc (pick-key rhs-proof) true)
                                                                  (assoc :rule-id rule-id)))))))
                      @result))))))]
-    (doall (mapcat #(if (:rule-used? %) (walk-rule % []) (vector (:prv %)))
-                   proofs))))
+     (mapcat #(if (:rule-used? %) (walk-rule % []) (vector (:prv %))) proofs)))
 
 (defn winnow-regardless
   "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that

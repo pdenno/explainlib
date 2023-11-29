@@ -786,8 +786,8 @@
 ;;; but this include one, (p-other x1 y1), from rule-1.
 (deftest one-step-of-proof
   (testing "the execution of the two rules that match on head for the query."
-    (is (= (set '[;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-bogo))
-                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-2))
+    (is (= (set '[;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-bogo)) ; 2023: I don't see how these could be considered correct!
+                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-2))    ; 2023: They are leaving a variable that is bound unbound.
                   ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-1))
                   ((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 ?z-r1))
                   ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 z-bogo))
@@ -933,7 +933,7 @@
             (->> (explain/walk-rules (-> "data/testing/proofs/whole-proof.edn" slurp read-string explain/varize)) (mapv #(mapv :step %)))))
     (is (= '[[(top-level 1 2 3) (second-level foo) (b 0)] [(top-level 1 2 3) (second-level foo) (third-level bar) (fourth-level baz) (d 1) (e 2) (f 3)]]
            (->> (explain/walk-rules small) (mapv #(mapv :step %)))))
-    #_(is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]
+    (is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]
              (->> (explain/walk-rules tiny) (mapv #(mapv :step %)))))
     (is (= '[[(top-level a-1 b-1 c-1) (a a-1) (b b-1) (c c-1)]]
            (->> (explain/walk-rules tiny-) (mapv #(mapv :step %)))))))

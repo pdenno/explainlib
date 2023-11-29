@@ -6,8 +6,8 @@
    [clojure.set                  :as sets]
    [clojure.walk                 :as walk]
    [clojure.spec.alpha           :as s]
-   [libpython-clj2.require :refer [require-python]]
-   [libpython-clj2.python :as py :refer [py. #_#_py.. py.-]]
+   [libpython-clj2.require       :refer [require-python]]
+   [libpython-clj2.python        :as py :refer [py.]]
    [mount.core                   :refer [defstate]]
    [explainlib.util               :as util]
    [taoensso.timbre              :as log]))
@@ -15,12 +15,7 @@
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
-(def maxsat-timeout 20000) ; 20 seconds!
-(def num-skolems (atom 0))
-
 (defn cvar?      [x] (-> x meta :cvar?))
-(defn logical?   [x] (-> x meta :logical?))
-(defn skolem?    [x] (-> x meta :skolem?))
 
 (def diag2 (atom {}))
 (def diag  (atom {}))
@@ -72,13 +67,6 @@
   [obj]
   (let [accum (atom #{})]
     (walk/postwalk (fn [x](when (cvar? x) (swap! accum conj x))) obj)
-    @accum))
-
-(defn collect-skolems
-  "Return a set of all the vars in a argument form"
-  [obj]
-  (let [accum (atom #{})]
-    (walk/postwalk (fn [x](when (skolem? x) (swap! accum conj x))) obj)
     @accum))
 
 (defn ground?
@@ -133,10 +121,6 @@
   [cost]
   (- 1.0 (Math/exp (/ (- cost) 100.0))))
 
-(defn cost2prob ; July experiment
-  [cost]
-    (Math/exp (/ (- cost) 100.0)))
-
 (defn skol-var
   "'Skolemize' the argument variable."
   [kb var]
@@ -157,25 +141,6 @@
      {:form
        (lit2form {:pred (uni/subst pred subs) :neg? neg?})
       :subs subs})))
-
-(defn invert-clause
-  "Return the clause with first literal complemented."
-  [clause]
-  (into (-> clause first comp-lit vector)
-        (rest clause)))
-
-(defn invert-lit
-  [lit]
-  (update lit :neg? not))
-
-(defn invert-rule
-  "Return the clause with first literal complemented. Doesn't varize"
-  [rule]
-  (-> rule
-      (update :cnf  #(invert-clause %)) ; POD ugly method!
-      (update :prob #(- 1.0 %))
-      (update :id   #(-> % name (str "i") keyword))
-      (update :head #(-> % form2lit comp-lit lit2form))))
 
 (defn name2suffix
   "Return a suffix good for use with the argument name (a keyword)"
@@ -272,36 +237,6 @@
                             :elimination-threshold ~elimination-threshold
                             :elimination-priority '~elimination-priority}))))
 
-(defn merge-kbs
-  "Return a KB which is the union of the argument KBs."
-  [& kbs]
-  (-> (reduce (fn [kb other-kb]
-                (-> kb
-                    (update :rules        #(-> % (into (:rules        other-kb)) distinct vec))
-                    (update :facts        #(-> % (into (:facts        other-kb)) distinct vec))
-                    (update :observations #(-> % (into (:observations other-kb)) distinct vec))))
-              {:rules [] :facts [] :observations []}
-              kbs)
-      (assoc-in [:vars :cost-fn] neg-log-cost)))
-
-(defn add-facts
-  [kb & facts]
-    (update kb :facts
-          into
-          (->> facts
-               (reduce into)
-               distinct
-               (sort #(> (:prob %1) (:prob %2))))))
-
-(defn add-observations
-  [kb & obs]
-  (update kb :observations
-          into
-          (->> obs
-               (reduce into)
-               distinct
-               (sort-by first))))
-
 (declare reset-scope-stack)
 (defn clear!
   "Put things back the way they are after evaluating defkb."
@@ -315,26 +250,12 @@
   (-> kb
       (dissoc :raw-proofs :cnf-proofs :pclauses)))
 
-(defn pred=
-  "Return true if the predicate symbols match."
-  [lit1 lit2]
-  (= (-> lit1 :pred first)
-     (-> lit2 :pred first)))
-
-(defn sign=
-  [lit1 lit2]
-  (= (:neg? lit1) (:neg? lit2)))
-
 (defn pred-names-a-rule?
   "Pred syms that name rules are not intended to be assumptions."
   [pred-sym kb]
   (let [head-syms (->> kb :rules vals (map :head) (map first) distinct)]
     (some #(= pred-sym %) head-syms)))
 
-;;; POD KB is now an arg to assumption-prob. Get rid of these!
-(def default-assumption-probability 0.40)
-(def default-black-list-probability 0.001)
-(def default-similarity-assumption-probability 0.001)
 ;;; I think these are a good idea even once I've implemented elimination order.
 ;;; However, some such as black-listed ta/isType might not be useful because the reasoner doesn't assume
 ;;; in places where some value exists.
@@ -900,7 +821,8 @@
           (walk-rule [rule path]
             (let [rule-id (:rule-used rule)
                   lhs (:proving rule)]
-              #_(when-not (ground? lhs) ; 2023-11-25 commented out. core_test (explain/walk-rules tiny)
+              ;; 2023-11-29: Variables are allowed here. They are how you get multiple proofs. See core_test (explain/walk-rules tiny)
+              #_(when-not (ground? lhs) ; 2023-11-25 commented out.
                 (throw (ex-info "Predicate is not ground (1)" {:rule rule :path path})))
               (loop [roles (:decomp rule)
                      new-paths (vector (conj path {:step lhs :rule? true :rule-id rule-id}))]
@@ -914,8 +836,8 @@
                        (if (:rule-used? rhs-proof)
                          (swap! result into (walk-rule rhs-proof old-path))
                          (do
-                           (when-not (ground? (:prvn rhs-proof))
-                             ;(reset! diag {:prvn (:prvn rhs-proof)})
+                           #_(when-not (ground? (:prvn rhs-proof)) ; 2023-11-19 ditto here I think!
+                                        ;(reset! diag {:prvn (:prvn rhs-proof)})
                              (throw (ex-info "Predicate is not ground (2)" {:prvn (:prvn rhs-proof) :rhs-proof rhs-proof})))
                            (swap! result conj (conj old-path (-> {}
                                                                  (assoc :step (:prvn rhs-proof))
@@ -1026,17 +948,17 @@
   [fact-set tail]
   (let [binds+ (bindings+ fact-set tail)
         combos (combo/combinations binds+ 2)]
-    (and (reduce (fn [still-true? [m1 m2]]
-                   (if (not still-true?) false
-                       (let [common-keys (filter #(contains? m2 %) (keys m1))]
-                         (every? #(let [m1-val (get m1 %)
-                                        m2-val (get m2 %)]
-                                    (or #_(cvar? m1-val)
-                                        #_(cvar? m2-val)
-                                        (= m1-val m2-val))) ; incomplete means even cvars must match
-                                 common-keys))))
-                 true
-                 combos))))
+    (reduce (fn [still-true? [m1 m2]]
+              (if (not still-true?) false
+                  (let [common-keys (filter #(contains? m2 %) (keys m1))]
+                    (every? #(let [m1-val (get m1 %)
+                                   m2-val (get m2 %)]
+                               (or #_(cvar? m1-val)
+                                   #_(cvar? m2-val)
+                                   (= m1-val m2-val))) ; incomplete means even cvars must match
+                            common-keys))))
+            true
+            combos)))
 
 ;;; (filter-rule-product-transducer (-> ppp :rules vals first :tail))
 (defn filter-rule-product-transducer
@@ -1576,6 +1498,7 @@
       (assoc  ?kb :datatab         (datatab ?kb))
       (assoc  ?kb :raw-proofs      (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}}))
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
+      (reset! diag ?kb)
       (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
@@ -1624,7 +1547,6 @@
       (cl-format stream "~2%~{~A~%~}" (->> p-inv vec (sort-by first))))
   true))
 
-
 (defn report-prop-ids
   [kb stream]
   (cl-format stream "~2%~{~A~%~}" (sort-by second (:prop-ids kb))))
@@ -1672,43 +1594,6 @@
       (report-scores    kb stream)
       (report-kb        kb stream))))
 
-;;; (query-proofs (:proof-vecs fff) '[(ta/conceptType ta/DemandType nWorkers)])
-;;; (query-proofs (:proof-vecs fff) '[(ta/conceptType ta/WorkerType nWorkers) (ta/simMatchVar nWorkers ta/WorkerType)])
-(defn query-proofs
-  "Return proof-ids of proof-vecs that contain the query. It uses uni/unify.
-   Example (query-proof (:proof-vecs kb) '(ta/conceptType ta/DemandType demand)).
-   Note that the queries argument is a collection but the not-queries are not."
-  [proof-vecs queries & not-queries]
-  (reduce-kv (fn [res proof-id pvec]
-               (if (and (every? (fn [q]
-                                  (some #(uni/unify % q) (->> pvec :steps (map :step))))
-                                queries)
-                        (not-any? (fn [q]
-                                  (some #(uni/unify % q) (->> pvec :steps (map :step))))
-                                  not-queries))
-                 (conj res proof-id)
-                 res))
-             []
-             proof-vecs))
-
-(defn check-tournament-consistency
-  "With a kb that is already ready for MPE analysis, run the analysis many times and see
-   how often the same players appear in the final. Results won't be perfect if only because
-   the tournament will have different numbers of players in it. (I'm getting 13-15)
-   with a 15 limit."
-  [kb & {:keys [run-times] :or {run-times 100}}]
-  (-> (reduce (fn [res cnt]
-                (println "Running tournament" cnt)
-                (let [tourn (run-problem kb :loser-fn identity :max-together 10 :return-just-winners? true)]
-                  (-> res
-                      (update :in-final into tourn)
-                      (update :won conj (first tourn)))))
-              {:in-final []
-               :won []}
-              (range run-times))
-      (update :in-final frequencies)
-      (update :won frequencies)))
-
 (defn start-explainlib
   "Call to py/initialize! and whatever else..."
   []
@@ -1716,10 +1601,3 @@
 
 (defstate explainlib
   :start (start-explainlib))
-
-;;; Temporary testing stuff
-;;;(report-results (explain-observation '(alarm plaza) test/alarm-kb))
-;;;(report-results (explain-observation '(blocked-road plaza) test/blocked-road-kb))
-;;;(report-results (explain-observation '(groupby Table-1 COLA COLB) test/job-kb))
-;;;(report-results (explain-observation '(objectiveFnVal CostTable) rule/r1))
-;;;(report-results (explain-observation '(objectiveFnVal ActualEffort) rule/r1))

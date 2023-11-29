@@ -26,6 +26,7 @@
       (reduce (fn [v _] (conj v (pick-from-ref! unused)))
               []
               (range n)))))
+
 (defn nspaces
   "Return a string of n spaces."
   [n]

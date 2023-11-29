@@ -1,0 +1,1 @@
+{:python-executable   "/usr/bin/python3.8"} ; Doesn't work with just "/usr/bin/python".

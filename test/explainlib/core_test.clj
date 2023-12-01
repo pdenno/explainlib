@@ -7,19 +7,21 @@
    [libpython-clj2.python :as py :refer [py. py.. py.-]]
    [explainlib.core :as explain :refer [defkb explain report-results]]))
 
-;;; ToDo: deftest these.
-;;;(report-results (explain '(alarm plaza) test/alarm-kb))
-;;;(report-results (explain '(blocked-road plaza) test/blocked-road-kb))
-;;;(report-results (explain '(groupby Table-1 COLA COLB) test/job-kb))
-;;;(report-results (explain '(objectiveFnVal CostTable) rule/r1))
-;;;(report-results (explain '(objectiveFnVal ActualEffort) rule/r1))
-
-
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
 ;;;================= Test running RC2 MAXSAT =============================
-(def basic-problem
+(def simplest-maxsat
+"p wcnf 2 7 321
+70        1           0
+30       -1           0
+20              2     0
+80             -2     0
+90        1    -2     0
+20       -1     2     0
+10       -1    -2     0")
+
+(def another-maxsat
   "p wcnf 9 21 2661
 2661   1 2                                            0
 461 -5 0
@@ -44,18 +46,24 @@
 36                          -5                  -9    0")
 
 ;;; POD Currently, I'm depending on the ordering of same-cost solutions!
-(deftest basic-problem-test
-  (is (= [{:model [ 1,-2, -3, -4, -5,  6, -7, -8, -9], :cost 238}
-          {:model [-1, 2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
-          {:model [ 1,-2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
-          {:model [-1, 2, -3, -4, -5,  6, -7, -8, -9], :cost 322}
-          {:model [-1, 2, -3, -4, -5, -6,  7, -8, -9], :cost 322}
-          {:model [ 1, 2, -3, -4, -5,  6, -7, -8, -9], :cost 330}
-          {:model [ 1,-2, -3,  4, -5,  6, -7, -8, -9], :cost 330}
-          {:model [ 1,-2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
-          {:model [-1, 2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
-          {:model [ 1, 2, -3, -4, -5,  6,  7, -8, -9], :cost 366}]
-         (explain/run-rc2-problem (wcnf/WCNF nil :from_string basic-problem) 10))))
+(deftest maxsat-tests
+  (testing "that max-sat problems work."
+    (is (= [{:model [1,  -2], :cost 70}
+            {:model [-1, -2], :cost 90}
+            {:model [1,   2], :cost 120}
+            {:model [-1,  2], :cost 240}]
+           (explain/run-rc2-problem (wcnf/WCNF nil :from_string simplest-maxsat) 10)))
+    (is (= [{:model [ 1,-2, -3, -4, -5,  6, -7, -8, -9], :cost 238}
+            {:model [-1, 2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
+            {:model [ 1,-2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
+            {:model [-1, 2, -3, -4, -5,  6, -7, -8, -9], :cost 322}
+            {:model [-1, 2, -3, -4, -5, -6,  7, -8, -9], :cost 322}
+            {:model [ 1, 2, -3, -4, -5,  6, -7, -8, -9], :cost 330}
+            {:model [ 1,-2, -3,  4, -5,  6, -7, -8, -9], :cost 330}
+            {:model [ 1,-2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
+            {:model [-1, 2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
+            {:model [ 1, 2, -3, -4, -5,  6,  7, -8, -9], :cost 366}]
+           (explain/run-rc2-problem (wcnf/WCNF nil :from_string another-maxsat) 10)))))
 
 (def tseitin-2
   "p wcnf 6 15 824
@@ -148,11 +156,11 @@
 ;;;==================================== Test BALP-based MPE =====================================
 ;;; No observations. Good for ...calculating probabilities?
 ;;; (report-results (explain '(dee foo) et/park-kb))
-(defkb park-kb
+(defkb park-kb  ; ToDo: Write a test that uses this KB.
+  "A KB for testing the problem from Park (2002) Using Weighted MAX-SAT engines to solve MPE."
   :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]
-  :facts [{:prob 0.3 :fact (cee ?x)}]
-  :observations [])
+  :facts [{:prob 0.3 :fact (cee ?x)}])
 
 ;;; My interpretation is the ProbLog interpretation.
 ;;; The ProbLog reading of these is CAUSAL: If +b ^ +e, this  causes an alarm to be true with probabiility 0.9.
@@ -160,6 +168,7 @@
 ;;; This makes sense from the causal perspective if you assume that you've accounted for all causes.
 ;;; (def aaa (explain '(alarm plaza) et/alarm-kb))
 (defkb alarm-kb
+  "A KB for a problem in the ProbLog documentation."
   :rules [{:prob 0.9
            :head  (alarm ?loc)
            :tail  [(burglary ?loc) (earthquake ?loc)]}
@@ -198,7 +207,8 @@
 
 ;;; This one hasn't really been validated. It has no hard clauses.
 ;;; That may be reasonable, given that all RHSs are allowed.
-(defkb alarm-2-kb
+(defkb alarm-2-kb ; ToDo: Write a test that uses this KB.
+  "A KB for a problem in the ProbLog documentation. This one hasn't been validated." ; ToDo: validate.
   :rules [{:prob 0.9
            :head  (alarm ?loc)
            :tail  [(burglary ?loc) (earthquake ?loc)]}
@@ -216,6 +226,7 @@
 
 ;;; (def abc (explain '(D foo) et/abcd-kb))
 (defkb abcd-kb
+  "A simple KB."
   :rules [{:prob 0.9
            :head (D ?x)
            :tail [(A ?x) (B ?x)]}
@@ -227,6 +238,7 @@
           {:prob 0.97 :fact (C ?c)}])
 
 (defkb abcd2-kb
+  "Another simple KB."
   :rules [{:prob 0.9
            :head (D ?x)
            :tail [(A ?x) (B ?x)]}
@@ -238,6 +250,7 @@
           {:prob 0.98 :fact (C ?c)}])
 
 (defkb one-rule-kb
+  "A KB with one rule."
   :rules [{:prob 0.9
            :head (D ?x)
            :tail [(A ?x) (B ?x)]}]
@@ -259,87 +272,48 @@
               {:cost 636, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
              (-> (explain '(D foo) abcd2-kb) :mpe))))))
 
-;;; Todo: Investigate this:  WARN [explainlib.core:203] - Rule :rule-2 has rule-rhs before rule data.
-;;;       This is reported if I switch the order of the predicates in the second rule to
-;;;       [(wear ?robot ?joint) (backlash-sim ?robot ?joint)].
-;;;       It doesn't change the results in this case, so I wonder whether it is legit test.
-;;;       If it is, why not just reorder them automatically?
-;;; (explain '(inaccurate-tcp robot-8) et/mfglet-kb)
-(defkb mfglet-kb
-  :rules [{:prob 0.4
-           :head (wear ?robot ?joint)
-           :tail [(stressed ?robot ?joint)]}
-          {:prob 0.8
-           :head (inaccurate-tcp ?robot)
-           :tail [(backlash-sim ?robot ?joint) (wear ?robot ?joint)]}
-          {:prob 0.7
-           :head (inaccurate-tcp ?robot)
-           :tail [(failing-sensor ?robot ?joint)
-                  (bad-sensor-processing ?robot)]}]
-  ;; Distilled from controller info, process knowledge, and a simulation:
-  :facts [{:prob 0.9 :fact (stressed robot-8 joint-2)}
-          {:prob 0.8 :fact (backlash-sim robot-8 joint-2)}
-          {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
-          {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
-
-
-(deftest mfglet-example
-  (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
-    (is (= [{:cost 439, :proof-id :proof-1, :pvec '((backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2))}
-            {:cost 813, :proof-id :proof-2, :pvec '((failing-sensor robot-8 joint-2) (bad-sensor-processing robot-8))}]
-           (-> (explain '(inaccurate-tcp robot-8) mfglet-kb) :mpe)))))
-
 ;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
-;;; [(accident plaza) 1]
-;;; [(clearing-wreck $crew-r2-skolem-1 plaza) 2]
-;;; [(drive-hazard plaza) 3]
-;;; [(heavy-snow plaza) 4]
-;;; 3,4 should be favored (0.8 vs 0.5).
-;;; (report-results (explain '(blocked-road plaza) et/blocked-road-kb))
-(defkb blocked-road-kb
-  :rules  [{:prob 0.8 ; ASYMMETRIC
-            :head (blocked-road ?loc)
+(defkb slow-road-even-kb
+  "The ProbLog blocked road KB. Everything is equal, thus heavy-snow is just as likely as accident."
+  :rules  [{:prob 0.5
+            :head (slow-road ?loc)
             :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
            {:prob 0.5
-            :head (blocked-road ?loc)
+            :head (slow-road ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
   :facts [{:prob 0.2 :fact (heavy-snow plaza)}
           {:prob 0.2 :fact (drive-hazard ?x)}
           {:prob 0.2 :fact (accident ?x)}
           {:prob 0.2 :fact (clearing-wreck ?x ?y)}])
 
-;;; assume clearing-wreck. default-assumption-probability  is 0.40 thus ASYMMETRIC
-;;; I think that is enough to make the top explanation accident/clearing-wreck.
-;;; (def bra (explain '(blocked-road plaza) et/bra-kb))
-(defkb bra-kb
-  :rules  [{:prob 0.5
-            :head (blocked-road ?loc)
+(defkb slow-road-kb
+  "The blocked road KB. From a ProbLog example, I think."
+  :rules  [{:prob 0.8 ; Thus it is the more reliable rule.
+            :head (slow-road ?loc)
             :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
            {:prob 0.5
-            :head (blocked-road ?loc)
-            :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow plaza)}
-          {:prob 0.2 :fact (drive-hazard ?x)}
-          {:prob 0.2 :fact (accident ?x)}]
-  :observations [])
-
-
-(defkb bs-kb
-  :rules  [{:prob 0.5
-            :head (blocked-road ?loc)
-            :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
-           {:prob 0.5
-            :head (blocked-road ?loc)
+            :head (slow-road ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
   :facts [{:prob 0.2 :fact (heavy-snow plaza)}
           {:prob 0.2 :fact (drive-hazard ?x)}
           {:prob 0.2 :fact (accident ?x)}
-          {:prob 0.2 :fact (clearing-wreck ?x ?y)}]
-  :observations [])
+          {:prob 0.2 :fact (clearing-wreck ?x ?y)}])
 
+(defkb slow-road-assumption-kb
+  "blocked road with (clearing-wreck $crew-r2-skolem-1 plaza) (default assumption prob is 0.10) thus heavy-snow should be favored."
+  :rules  [{:prob 0.5
+            :head (slow-road ?loc)
+            :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
+           {:prob 0.5
+            :head (slow-road ?loc)
+            :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
+  :facts [{:prob 0.2 :fact (heavy-snow plaza)}
+          {:prob 0.2 :fact (drive-hazard ?x)}
+          {:prob 0.2 :fact (accident ?x)}]) ; Dropped clearing-wreck.
 
 ;;; (def jjj (explain '(groupby Table-1 COLA COLB) et/job-kb))
 (defkb job-kb
+  "This KB is from a problem described in my thesis: find columns that together describe a job."
   :rules [{:prob 0.70 :head (concatKey ?tab ?x ?y)      :tail [(jobID ?tab ?x ?y)]}
           {:prob 0.70 :head (jobID ?tab ?x ?y)          :tail [(date ?tab ?x) (productDesc ?tab ?y)]}
           {:prob 0.05 :head (productDesc ?tab ?x)       :tail [(date ?tab ?x)]}
@@ -349,7 +323,8 @@
   :observations [(date Table-1 COLA)
                  (productDesc Table-1 COLB)])
 
-(defkb job-kb-facts
+(defkb job-kb-facts-kb ; ToDo: Write a test that uses this KB.
+  "Like job-kb but with more facts."
   :rules [{:prob 0.70 :head (concatKey ?tab ?x ?y)      :tail [(jobID ?tab ?x ?y)]}
           {:prob 0.70 :head (jobID ?tab ?x ?y)          :tail [(date ?tab ?x) (productDesc ?tab ?y)]}
           {:prob 0.05 :head (productDesc ?tab ?x)       :tail [(date ?tab ?x)]}
@@ -362,7 +337,8 @@
 ;;; Follow the lead from alarm-kb. The result is a set of CPTs.
 ;;; Following ProbLog semantics, the lack of a rule means the corresponding entry
 ;;; in the CPT is 0. I should perhaps be using this in a little better in the job-kb?
-(defkb shortness ; 'dyspnea'
+(defkb shortness-kb ; 'dyspnea' ; ToDo: Write a test that uses this KB.
+  "This KB is probably a ProbLog example."
   :rules [{:prob 0.01 :head (tuber  ?x) :tail [(visit  ?x)]}
           {:prob 0.31 :head (abnorm ?x) :tail [(tuber  ?x) (not (lung ?x))]}
           {:prob 0.32 :head (abnorm ?x) :tail [(not (tuber  ?x)) (lung ?x)]}
@@ -374,7 +350,8 @@
 ;;; (2) Add (decisionVar TeamsOnLine) and it correctly infers that NOT (decisionVar ActualEffort).
 ;;; (3) Change rule prob to 60/60 and it still gets it right!
 ;;; (explain '(objectiveFnVal ActualEffort) et/r1)
-(defkb r1
+(defkb concepts1-kb ; ToDo: Write a test that uses this KB.
+  "This is a KB for 'inferring concepts' from my thesis."
   :rules [{:prob 0.60 :head (objectiveFnVal ?x) :tail [(designVar ?x)                               (contributesToObj ?x)]}
           {:prob 0.60 :head (objectiveFnVal ?y) :tail [(optLocalVar ?y) (designVar ?x) (func ?x ?y) (contributesToObj ?y)]}]
   :facts [{:prob 0.10 :fact (func ?x ?x)}]
@@ -388,7 +365,8 @@
 ;;;  (1) doesJobs is injective from Workers to Jobs.
 ;;;  (2) The Workers set MUST NOT BE bigger than the Jobs set.
 ;;;  (3) The Jobs set CAN BE bigger than the Workers set.
-(defkb r2 ; More stuff for assignment problem: is it legitimately using allDifferent?
+(defkb concepts2-kb ; More stuff for assignment problem: is it legitimately using allDifferent? ; ToDo: Write a test that uses this KB.
+    "This is a KB for 'inferring concepts' from my thesis. More observations than concepts1-kb"
   :rules [{:prob 0.90 :head (allDifferent ?f)       :tail [(func1 ?f ?x ?y) (injective ?f)]}
           {:prob 0.90 :head (func1 ?f ?x ?y)        :tail [(decisionVar ?f) (varDomain ?f ?x) (varCodomain ?f ?y)]}
           {:prob 0.01 :head (injective ?f)          :tail [(func1 ?f ?x ?y) (indexSet ?x) (indexSet ?y) (biggerSet ?x ?y)]}
@@ -411,7 +389,84 @@
                  (func TeamsOnLine ActualEffort)
                  (contributesToObj ActualEffort)])
 
+;;; Todo: Investigate this:  WARN [explainlib.core:203] - Rule :rule-2 has rule-rhs before rule data.
+;;;       This is reported if I switch the order of the predicates in the second rule to
+;;;       [(wear ?robot ?joint) (backlash-sim ?robot ?joint)].
+;;;       It doesn't change the results in this case, so I wonder whether it is legit test.
+;;;       If it is, why not just reorder them automatically?
+(defkb mfglet-kb
+  "This is the KB used in the 2023 Manufacturing Letters paper with Deo."
+  :rules [{:prob 0.4
+           :head (wear ?robot ?joint)
+           :tail [(stressed ?robot ?joint)]}
+          {:prob 0.8
+           :head (inaccurate-tcp ?robot)
+           :tail [(backlash-sim ?robot ?joint) (wear ?robot ?joint)]}
+          {:prob 0.7
+           :head (inaccurate-tcp ?robot)
+           :tail [(failing-sensor ?robot ?joint)
+                  (bad-sensor-processing ?robot)]}]
+  ;; Distilled from controller info, process knowledge, and a simulation:
+  :facts [{:prob 0.9 :fact (stressed robot-8 joint-2)}
+          {:prob 0.8 :fact (backlash-sim robot-8 joint-2)}
+          {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
+          {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
+
+
+(defn simple-mpe
+  "Pull out model and cost for testing."
+  [kb]
+  (->> kb :mpe (map #(dissoc % :proof-id)) (sort-by :cost) vec))
+
 ;;;==================================== Tests ======================================================
+(deftest good-explanations
+  (testing "That MPE is getting good results."
+    (testing "Example from Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"
+      #_(is (= :to-do
+             (-> (explain '(dee foo) park-kb) simple-mpe)))
+
+    #_(testing "ToDo: describe"
+        #_(is (= #{{:model [  1  -2] :cost    80}
+                   {:model [  1   2] :cost   208}
+                   {:model [ -1   2] :cost   511}}
+                 (-> (explain '(alarm plaza) alarm-kb) simple-mpe)))) ; <============== compare lists problem; Seem to be playing games!
+
+    (testing "Testing that where there are no difference in probability, there are no differences in cost."
+      (is (= [{:cost 504, :pvec '[(accident plaza) (clearing-wreck ?x-f4 plaza)]}
+              {:cost 504, :pvec '[(heavy-snow plaza) (drive-hazard plaza)]}]
+             (-> (explain '(slow-road plaza) slow-road-even-kb) simple-mpe))))
+
+    (testing "Testing rule probabilities. The rule for heavy-snow is more reliable."
+      (is (= [{:cost 504, :pvec '[(accident plaza) (clearing-wreck ?x-f4 plaza)]}
+              {:cost 549, :pvec '[(heavy-snow plaza) (drive-hazard plaza)]}]
+             (-> (explain '(slow-road plaza) slow-road-kb) simple-mpe))))
+
+    (testing "Favor explanations that don't have a default low-probability assumption. (It warns about it.)"
+      (is (= [{:cost 493, :pvec '[(heavy-snow plaza) (drive-hazard plaza)]}
+              {:cost 573, :pvec '[(accident plaza) (clearing-wreck $crew-r2-skolem-1 plaza)]}]
+             (-> (explain '(slow-road plaza) slow-road-assumption-kb) simple-mpe))))
+
+    #_(testing "ToDo: describe"
+        (is (=  [{:model [ 1 -2 -3  4 -5 -6], :cost 220}
+                 {:model [-1  2  3 -4  5  6], :cost 676}]
+                (-> (explain '(groupby Table-1 COLA COLB) job-kb) simple-mpe))))
+
+    #_(testing "ToDo: Describe -- Without inverse facts and assumptions, this one just disappears!"
+        (is (= #{{:model [-1], :cost 51} {:model [1], :cost 92}}
+               (->> (explain '(objectiveFnVal ActualEffort) r1) :mpe (map #(dissoc % :prob)) set))))
+
+    #_(testing "ToDo: Describe -- There is only one RHS on this one [1,2,3,4] are all PIDs."
+        (is (= #{{:model [ 1 -2 3 4], :cost 73}
+                 {:model [-1 -2 3 4], :cost 73}
+                 {:model [-1  2 3 4], :cost 575}
+                 {:model [ 1  2 3 4], :cost 1036}}
+               (->> (explain '(allDifferent doesJob) concepts2-kb) :mpe (map #(dissoc % :prob)) set))))
+    (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
+      (is (= [{:cost 439, :pvec '((backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2))}
+              {:cost 813, :pvec '((failing-sensor robot-8 joint-2) (bad-sensor-processing robot-8))}]
+             (-> (explain '(inaccurate-tcp robot-8) mfglet-kb) simple-mpe)))))))
+
+
 ;;; In ~is~ the correct one goes first in the =. (is (= correct-value generated-value))
 #_(deftest test-binding-sets
   (testing "that binding sets are created correctly"
@@ -441,16 +496,16 @@
 (deftest test-postprocessed-proof-2 (is true))
 #_(deftest test-postprocessed-proof-2
   (testing "that abductive logic proofs on a simple example look okay."
-    (let [result (explain '(blocked-road plaza) blocked-road-kb)]
+    (let [result (explain '(slow-road plaza) slow-road-kb)]
       (is (= '({:using-rule :rule-1,
                 :rule-subs {?loc-r1 plaza},
                 :prob 0.8,
-                :lhs {:pred (blocked-road ?loc-r1), :neg? false},
+                :lhs {:pred (slow-road ?loc-r1), :neg? false},
                 :rhs
                 ({:pred (heavy-snow ?loc-r1), :neg? false}
                  {:pred (drive-hazard ?loc-r1), :neg? false}),
                 :cnf
-                [{:pred (blocked-road plaza), :neg? false}
+                [{:pred (slow-road plaza), :neg? false}
                  {:pred (heavy-snow plaza), :neg? true}
                  {:pred (drive-hazard plaza), :neg? true}],
                 :steps
@@ -469,12 +524,12 @@
                {:using-rule :rule-2,
                 :rule-subs {?loc-r2 plaza, ?crew-r2 $crew-r2-skolem-1},
                 :prob 0.5,
-                :lhs {:pred (blocked-road ?loc-r2), :neg? false},
+                :lhs {:pred (slow-road ?loc-r2), :neg? false},
                 :rhs
                 ({:pred (accident ?loc-r2), :neg? false}
                  {:pred (clearing-wreck ?crew-r2 ?loc-r2), :neg? false}),
                 :cnf
-                [{:pred (blocked-road plaza), :neg? false}
+                [{:pred (slow-road plaza), :neg? false}
                  {:pred (accident plaza), :neg? true}
                  {:pred (clearing-wreck $crew-r2-skolem-1 plaza), :neg? true}],
                 :steps
@@ -504,21 +559,8 @@
 ;;; :or-pairs [#{2 1} #{2 5} #{4 1} #{4 5}]}.
 ;;;
 ;;; Means remove  #{2 1} and #{2 5} from :nand-pairs (that starts as a copy of :or-pairs).
-#_(deftest test-max-sat
-  (testing "that max-sat problems work (jupyter/app-gateway must be running)."
-    (is (= (explain/python-maxsat
-     "p wcnf 2 7 321
-70        1           0
-30       -1           0
-20              2     0
-80             -2     0
-90        1    -2     0
-20       -1     2     0
-10       -1    -2     0")
-           [{:model [1  -2], :cost 70,  :prob 0.4965853037914095}
-            {:model [-1 -2], :cost 90,  :prob 0.4065696597405991}
-            {:model [1   2], :cost 120, :prob 0.30119421191220214}
-            {:model [-1  2], :cost 240, :prob 0.09071795328941251}]))))
+
+
 
 ;;; p wcnf 2 8 603
 ;;; 603      1    2    0
@@ -530,58 +572,25 @@
 ;;; 22      -1    2    0 c RU :rule-2 {?loc-r2 plaza} | INV | REDU (alarm plaza)
 ;;; 11      -1   -2    0 c RU :rule-1 {?loc-r1 plaza} | INV | REDU (alarm plaza)
 
-(deftest good-explanations (is true))
-#_(deftest good-explanations
-  (testing "That MPE is getting good results. jupyter/app-gateway must be running"
-    (is (= #{{:model [  1  -2] :cost    80}
-             {:model [  1   2] :cost   208}
-             {:model [ -1   2] :cost   511}}
-           (->> (explain '(alarm plaza) alarm-kb) :mpe (map #(dissoc % :prob)) set)))
-    (is (= #{{:model [-1 -2  3  4], :cost 388}
-             {:model [ 1  2 -3 -4], :cost 435}}
-           (->> (explain '(blocked-road plaza) blocked-road-kb) :mpe (map #(dissoc % :prob)) set)))
-    (is (= #{{:model [  1   2  -3  -4] :cost   366}
-             {:model [ -1  -2   3   4] :cost   464}}
-           (->> (explain '(blocked-road plaza) bra-kb) :mpe (map #(dissoc % :prob)) set)))
-    (is (= #{{:model [  1   2  -3  -4] :cost   435}
-             {:model [ -1  -2   3   4] :cost   435}}
-           (->> (explain '(blocked-road plaza) bs-kb) :mpe (map #(dissoc % :prob)) set)))
-    (is (=  [{:model [ 1 -2 -3  4 -5 -6], :cost 220}
-             {:model [-1  2  3 -4  5  6], :cost 676}]
-           (as-> (explain '(groupby Table-1 COLA COLB) job-kb) ?r
-             (:mpe ?r)
-             (mapv #(dissoc % :prob) ?r))))
-    ;; Without inverse facts and assumptions, this one just disappears!
-    (is (= #{{:model [-1], :cost 51} {:model [1], :cost 92}}
-           (->> (explain '(objectiveFnVal ActualEffort) r1) :mpe (map #(dissoc % :prob)) set)))
-    ;; There is only one RHS on this one [1,2,3,4] are all PIDs
-    (is (= #{{:model [ 1 -2 3 4], :cost 73}
-             {:model [-1 -2 3 4], :cost 73}
-             {:model [-1  2 3 4], :cost 575}
-             {:model [ 1  2 3 4], :cost 1036}}
-           (->> (explain '(allDifferent doesJob) r2) :mpe (map #(dissoc % :prob)) set)))))
-
-(deftest instance-probs (is true))
-#_(deftest instance-probs
+(deftest instance-probs
   (testing "that conditional probabilities are calculcated correctly"
-    (is true)))
-
-;;;    (is (< 0.059
-;;;           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(cee $x1-skolem-1)])
-;;;              (explain/cprob p-kb '(cee $x1-skolem-1)))
-;;;           0.061))
-;;;    (is (< 0.239
-;;;           (* (explain/cprob p-kb '(not (dee $x1-skolem-1)) '[(cee $x1-skolem-1)])
-;;;              (explain/cprob p-kb '(cee $x1-skolem-1)))
-;;;           0.251))
-;;;    (is (< 0.069
-;;;           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(not (cee $x1-skolem-1))])
-;;;              (explain/cprob p-kb '(not (cee $x1-skolem-1))))
-;;;           0.071))
-;;;    (is (< 0.629
-;;;           (* (explain/cprob p-kb '(not (dee $x1-skolem-1)) '[(not (cee $x1-skolem-1))])
-;;;              (explain/cprob p-kb '(not (cee $x1-skolem-1))))
-;;;           0.631))
+    (is true)
+    #_(is (< 0.059 ; 2023: Find out what cprob did!
+           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(cee $x1-skolem-1)])
+              (explain/cprob p-kb '(cee $x1-skolem-1)))
+           0.061))
+    #_(is (< 0.239
+           (* (explain/cprob p-kb '(not (dee $x1-skolem-1)) '[(cee $x1-skolem-1)])
+              (explain/cprob p-kb '(cee $x1-skolem-1)))
+           0.251))
+    #_(is (< 0.069
+           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(not (cee $x1-skolem-1))])
+              (explain/cprob p-kb '(not (cee $x1-skolem-1))))
+           0.071))
+    #_(is (< 0.629
+           (* (explain/cprob p-kb '(not (dee $x1-skolem-1)) '[(not (cee $x1-skolem-1))])
+              (explain/cprob p-kb '(not (cee $x1-skolem-1))))
+           0.631))))
 
 (def pre-example
   '({:steps [{:prv (ta/conceptType ta/DemandType demand),
@@ -624,7 +633,6 @@
   (testing "that gather-proven, etc. works"
     (is (= (explain/gather-proven pre-example) post-example))))
 
-
 ;;; Here is a problem: I don't think I should be creating assumptions until after all other RHS have created bindings.
 ;;; I currently have some code in prove-fact to collect bindings into an atom, rule-accum-subs, but that doesn't look
 ;;; like it is placed in the correct place. What it would make is a fact (py/traceVar demand demand) but I added
@@ -654,7 +662,8 @@
                :proofs ({:proven (ta/simMatchVar demand ta/DemandType), :fact? true})}]})
 
 ;;; Here is the kb I'm using in the above.
-(defkb type-kb
+(defkb type-kb ; ToDo: Write a test that uses this KB.
+  "This is a KB for concept inference, such as used in my thesis."
   :rules [{:prob 0.95 :head (ta/conceptQuery ?x) :tail [(ta/conceptType ta/DemandType          ?x)]}
           {:prob 0.95 :head (ta/conceptQuery ?x) :tail [(ta/conceptType ta/WorkerType          ?x)]}
           {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(ta/conceptVar   ?type ?x)]}
@@ -678,7 +687,8 @@
 ;;;  ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 ?z-r1))}  <--- HUH! NO. ?z binds to z-1    (already above)
 
 ;;; ================================== Testing parts of proof-generation process =======================
-(defkb ptest
+(defkb proof-gen-kb
+  "This is a KB for testing the rule-product-transducer."
   :rules [{:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-1 ?x) (p-2 ?y) (p-3 ?x ?z) (p-4 ?y ?z)]}
           {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption.
           {:prob 0.01 :head (p-foo ?x)     :tail [(p-1 ?x)]}]
@@ -722,7 +732,7 @@
             is renamed to the way it appears in rules. You have to know WHERE in the rule (ix)
             you are working because the rule can have the same predicate in the RHS several times."
     (let [query '(p-lhs x-1 y-1)
-          kb (as-> (explain/finalize-kb ptest query) ?kb
+          kb (as-> (explain/finalize-kb proof-gen-kb query) ?kb ; 2023 was ptest
                (assoc ?kb :datatab (explain/datatab ?kb)))]
       (is (= data-from-datatab-p-3
              (set (-> kb :datatab (get 'p-3)))))
@@ -731,7 +741,7 @@
 
 (def proof-test-kb-1
   (let [query '(p-lhs x-1 y-1)]
-    (as-> (explain/finalize-kb ptest query) ?kb
+    (as-> (explain/finalize-kb proof-gen-kb query) ?kb ; 2023 was ptest
       (assoc ?kb :datatab (explain/datatab ?kb)))))
 
 ;;;(deftest tailtab-test (is true))
@@ -809,7 +819,8 @@
 
 
 ;;;=============================================================================================================
-(defkb ptest
+(defkb rule-product-kb ; ToDo: Write a test that uses this KB.
+  "This is another KB for testing the rule-product-transducer."
   :rules [{:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-1 ?x) (p-2 ?y) (p-3 ?x ?z) (p-4 ?y ?z)]}
           {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption.
           {:prob 0.01 :head (p-foo ?x)     :tail [(p-1 ?x)]}]
@@ -953,22 +964,22 @@
         (not= type expected-type)))))
 
 (defn explain-concept-of-id
-  "explain/explain the given ID in the notebook."
+  "explain the given ID in the notebook."
   [id-key kb+setup]
   (let [id-sym (-> id-key name symbol)
         expect (-> kb+setup :setup :tests id-key :expect)
         loser (interesting-loser-fn id-sym expect)
         {:keys [mpe loser]}
-        (explain/explain (seq (list 'ta/conceptQuery id-sym))
-                         (:kb kb+setup)
-                         :loser-fn loser)]
+        (explain (seq (list 'ta/conceptQuery id-sym))
+                 (:kb kb+setup)
+                 :loser-fn loser)]
     {:mpe mpe :loser loser}))
 
 (defn run-experiment
-  "Like run experiment, but doesn't need jupyter because it is reading saved data from the NB analysis"
-  [epath]
+  "Like an nb-agent run experiment, but doesn't need jupyter because it is reading saved data from the NB analysis"
+  [kb+setup]
   (let [result
-        (as-> (-> epath slurp  read-string) ?exp
+        (as-> kb+setup ?exp
           (update-in ?exp [:kb :assumptions-used] atom)
           (assoc-in ?exp [:kb :vars]
                     {:cost-fn      explainlib.core/neg-log-cost
@@ -985,9 +996,24 @@
           (dissoc ?exp :kb :evidence))]
     result))
 
+;;; I think these are a good idea even once I've implemented elimination order.
+;;; However, some such as black-listed ta/isType might not be useful because the reasoner doesn't assume
+;;; in places where some value exists.
+(defn bautista-params
+  [kb+setup]
+  (assoc-in kb+setup [:kb :params]
+            (merge explain/default-params
+                   {:default-assume-prob       0.400 ; <==== ahem... Also the next two!
+                    :not-yet-implemented?      '#{py/traceVar} ; ToDo: This one and next aren't even part of defkb.
+                    :requires-evidence?        '#{mz/indexedBy mz/indexedBy-1 mz/indexedBy-2 py/linkBack}
+                    :black-listed-preds        '#{ta/isType ta/simMatchVar ta/simMatchExcelSheet ta/simMatchColName}})))
+
 (deftest bautista-obvious
   (testing "medium-sized MPE calculation."
     (let [results (->> "data/testing/experiments/work-overload/b-obvious-in.edn"
+                       slurp
+                       read-string
+                       bautista-params
                        run-experiment
                        :explains
                        :demand

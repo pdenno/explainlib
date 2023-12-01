@@ -210,32 +210,59 @@
     (update ?kb :rules finalize-rules)
     (update ?kb :facts finalize-facts)))
 
+
+;;; ToDo: All of these need definition
+(def default-elimination-threshold              400)
+(def default-black-listed-preds                 #{})
+(def default-black-list-probability             0.001)
+(def default-pred-names-rule-probability        0.001)
+(def default-assumption-probability             0.100)
+(def valid-kb-keys "Keys allowed in a defkb declaration."
+  #{:rules :facts :observations :eliminate-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
+    :black-listed-preds :black-list-prob :pred-names-rule-prob :default-assume-prob})
+
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
    will be generated afterwards. Its facts are observations. Each observation is a ground
    literal that will be processed through BALP to generate all proof trees."
-  [name & {:keys [rules facts observations cost-fn inv-cost-fn eliminate-assumptions elimination-priority elimination-threshold]
-                         :or {rules []
-                              facts []
-                              observations []
-                              eliminate-assumptions []
-                              elimination-threshold 400
-                              elimination-priority []
-                              cost-fn     neg-log-cost
-                              inv-cost-fn neg-log-cost-1}}]
-  `(do
-     (def ~name (identity  {:vars {:assumption-count (atom 0)
-                                   :pclause-count (atom 0)
-                                   :num-skolems (atom 0)
-                                   :cost-fn ~cost-fn,
-                                   :inv-cost-fn ~inv-cost-fn}
-                            :rules '~rules
-                            :facts '~facts
-                            :assumptions-used (atom {})
-                            :observations '~observations
-                            :eliminate-assumptions '~eliminate-assumptions
-                            :elimination-threshold ~elimination-threshold
-                            :elimination-priority '~elimination-priority}))))
+  [name doc-string & {:keys [rules facts observations eliminate-assumptions elimination-priority elimination-threshold cost-fn inv-cost-fn
+                  black-listed-preds black-list-prob pred-names-rule-prob default-assume-prob]
+           :or {rules                      []
+                facts                      []
+                observations               []
+                eliminate-assumptions      []
+                elimination-priority       []
+                cost-fn                    neg-log-cost
+                inv-cost-fn                neg-log-cost-1
+                elimination-threshold      default-elimination-threshold
+                black-listed-preds         default-black-listed-preds
+                black-list-prob            default-black-list-probability
+                pred-names-rule-prob       default-pred-names-rule-probability
+                default-assume-prob        default-assumption-probability} :as args}]
+  (let [invalid-keys (clojure.set/difference (-> args keys set) valid-kb-keys)]
+    (if (not-empty invalid-keys)
+      (throw (ex-info (str "Invalid keys in defkb: " invalid-keys) {:invalid invalid-keys}))
+      `(def ~name (identity  {:doc-string ~doc-string
+                              :vars {:assumption-count (atom 0)
+                                     :pclause-count (atom 0)
+                                     :num-skolems (atom 0)
+                                     :cost-fn ~cost-fn,
+                                     :inv-cost-fn ~inv-cost-fn}
+                              :params {:black-listed-preds         ~black-listed-preds
+                                       :black-list-prob            ~black-list-prob
+                                       :pred-names-rule-prob       ~pred-names-rule-prob
+                                       :default-assume-prob        ~default-assume-prob}
+                              :rules '~rules
+                              :facts '~facts
+                              :assumptions-used (atom {})
+                              :observations '~observations
+                              :eliminate-assumptions '~eliminate-assumptions
+                              :elimination-threshold ~elimination-threshold
+                              :elimination-priority '~elimination-priority})))))
+
+(defkb _blank-kb "This KB is used to define the following default- vars.")
+(def default-params (-> #'_blank-kb var-get :params))
+(def default-vars   (-> #'_blank-kb var-get :vars))
 
 (declare reset-scope-stack)
 (defn clear!
@@ -247,8 +274,7 @@
   (reset! (-> kb :vars :assumption-count) 0)
   (reset! (-> kb :vars :pclause-count) 0)
   (reset! (-> kb :vars :num-skolems) 0)
-  (-> kb
-      (dissoc :raw-proofs :cnf-proofs :pclauses)))
+  (dissoc kb :raw-proofs :cnf-proofs :pclauses))
 
 (defn pred-names-a-rule?
   "Pred syms that name rules are not intended to be assumptions."
@@ -256,21 +282,18 @@
   (let [head-syms (->> kb :rules vals (map :head) (map first) distinct)]
     (some #(= pred-sym %) head-syms)))
 
-;;; I think these are a good idea even once I've implemented elimination order.
-;;; However, some such as black-listed ta/isType might not be useful because the reasoner doesn't assume
-;;; in places where some value exists.
-(def not-yet-implemented? '#{py/traceVar})
-(def black-list-pred?     '#{ta/isType ta/simMatchVar ta/simMatchExcelSheet ta/simMatchColName})
-(def requires-evidence?   '#{mz/indexedBy mz/indexedBy-1 mz/indexedBy-2 py/linkBack})
-
+;;; ToDo: not-yet-implemented? and requires-evidence? aren't even defaults in defkb. Not that useful; used in just one core_test.
 (defn assumption-prob
   "Return an assumption probability for the argument."
   [pred-sym kb]
-  (cond (not-yet-implemented? pred-sym)               0.001  ;default-black-list-probability
-        (black-list-pred? pred-sym)                   0.001  ;default-black-list-probability
-        (requires-evidence? pred-sym)                 0.01  ;default-similarity-assumption-probability ; 0.001
-        (pred-names-a-rule? pred-sym kb)              0.001
-        :else                                         0.400))
+  (let [not-yet-implemented? (when-let [check? (-> kb :params :not-yet-implemented?)] (check? pred-sym))
+        requires-evidence?   (when-let [check? (-> kb :params :requires-evidence?)]   (check? pred-sym))
+        black-listed-pred?   ((-> kb :params :black-listed-preds) pred-sym)]
+    (cond not-yet-implemented?              (do (log/warn "using not-yet-implemented? for pred-sym" pred-sym) (-> kb :params :black-list-prob))
+          black-listed-pred?                (do (log/warn "using black-list-pred? for pred-sym" pred-sym)     (-> kb :params :black-list-prob))
+          requires-evidence?                (do (log/warn "using requires-evidence? for pre-dsym" pred-sym)   0.01) ; <================================ ToDo: Is it used? ;default-similarity-assumption-probability ; 0.001
+          (pred-names-a-rule? pred-sym kb)  (-> kb :params :pred-names-rule-prob)
+          :else                             (do (log/warn "Using default assume-prob for" pred-sym)           (-> kb :params :default-assume-prob)))))
 
 (defn pclause-for-non-rule
   "Create pclauses for non-rule proof-vec steps."
@@ -549,7 +572,9 @@
 (defn inverse-assumptions
   "Return a vector inverses of the assumptions used."
   [kb]
+  ;(swap! diag #(assoc % :kb kb))
   (letfn [(pinv [pc]
+            ;(swap! diag #(assoc % :pc pc))
             (-> pc
                 (update-in [:cnf 0 :neg?] not)
                 (update :prob #(- 1.0 %))
@@ -627,7 +652,7 @@
       (mapv (fn [indv]
               (as-> indv ?i
                 (assoc ?i :proof-id (model2proof-id (remove #(z-set %) (:model indv)) prop-ids proof-vecs))
-                (assoc ?i :pvec (-> (get proof-vecs (:proof-id ?i)) :pvec))
+                (assoc ?i :pvec (-> (get proof-vecs (:proof-id ?i)) :pvec vec))
                 (dissoc ?i :model))) ; pvec has all the info of model
             results))
     (catch Throwable _ (log/error "Problem running MAXSAT."))))
@@ -1553,12 +1578,9 @@
 
 (defn report-scores
   [kb stream]
-  (doseq [sol (:mpe kb)]
-    (let [;fail-info (fail-list kb (:model sol))
-          #_info-strings #_(map #(cl-format nil "~A:[~{~A~^ ~}]" (:cid %) (:pids %)) fail-info)]
-      (cl-format stream "~%:cost ~5d :true ~A"
-                 (:cost  sol)
-                 (->> sol :proof-set (sort-by first))))))
+  (doseq [sol (->> kb :mpe (sort-by :cost))]
+    (cl-format stream "~%:cost ~5d :true ~A" (:cost  sol) (->> sol :pvec vec)))
+  (cl-format stream "~%"))
 
 (defn name2num
   "Return the number n of :fact-n or :rule-n."

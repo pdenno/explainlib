@@ -1,18 +1,39 @@
 (ns explainlib.core-test
+  "Tests, demonstration and explanation for aspects of the explainlib algorithms."
   (:require
-   [clojure.core.unify     :as uni]
-   [clojure.test           :refer [deftest is testing]]
-   [clojure.set             :as sets]
-   [libpython-clj2.require :refer [require-python]]
-   [libpython-clj2.python :as py :refer [py. py.. py.-]]
-   [explainlib.core :as explain :refer [defkb explain report-results]]))
+   [clojure.core.unify          :as uni]
+   [clojure.set                 :as sets]
+   [clojure.test                :refer [deftest is testing]]
+   [explainlib.core :as explain :refer [defkb explain report-results]]
+   [libpython-clj2.require      :refer [require-python]]
+   [taoensso.timbre             :as log]))
 
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
-;;;================= Test running RC2 MAXSAT =============================
-(def simplest-maxsat
-"p wcnf 2 7 321
+(defn filter-to-simple-mpe
+  "Pull out of an executed problem (a kb + execution results) its model and cost (for use in a test)."
+  [problem]
+  (->> problem :mpe (map #(dissoc % :proof-id)) (sort-by :cost) vec))
+
+;;;================================ Test running the RC2 MAXSAT Python algorithm =============================
+;;; WDIMACS format http://www.maxhs.org/docs/wdimacs.html N.B. Comments can only be on a line by themselves: #"^c (.*)"
+;;; I use them differently, but the solver never sees my comments. Note that WDIMACS is used by CPLEX; probably quite old.
+
+;;; WCNF = Weighted Conjunctive Normal Form, https://hardlog.udl.cat/static/doc/optilog/html/optilog/formula/WCNF.html
+;;; CNF = Each line is a disjunction, the collection of lines is the conjunction.
+;;; Horn Clause =  A disjunctive clause in which at most one literal (the head) is positive (not negated).
+;;;    Intutitively, the motivation behind reasoning with Horn clauses is that the only truth table entry that is false is one in which
+;;;    all the body literals are true and the head literal is false.
+;;;    This can be interpreted as requiring necessarily that if the body literals are true, the head literal is also.
+;;; pclause = A clause with associated probability computed for translation to a line in the WCNF.
+;;;    N.B pclauses and the lines of the WCNF need not be Horn clauses.
+;;;
+;;; The WCNF cost is incurred if the individual has all literals opposite of the WCNF line.
+
+(def simplest-maxsat ; The solution to this one is described at deftest maxsat-test.
+  "p wcnf 2 7 321
+c This is a comment.  'c' in first column, then a space!
 70        1           0
 30       -1           0
 20              2     0
@@ -45,24 +66,31 @@
 36                -3                  -7        -9    0
 36                          -5                  -9    0")
 
-;;; POD Currently, I'm depending on the ordering of same-cost solutions!
+
+;;; 1 : 70        1           0
+;;; 2 : 30       -1           0
+;;; 3 : 20              2     0
+;;; 4 : 80             -2     0
+;;; 5 : 90        1    -2     0
+;;; 6 : 20       -1     2     0
+;;; 7 : 10       -1    -2     0
 (deftest maxsat-tests
-  (testing "that max-sat problems work."
-    (is (= [{:model [1,  -2], :cost 70}
-            {:model [-1, -2], :cost 90}
-            {:model [1,   2], :cost 120}
-            {:model [-1,  2], :cost 240}]
+  (testing "that max-sat problems work."   ; The individual incurs the cost if they disagree on ALL literals of the WCNF line. (See numbered lines above.)
+    (is (= [{:model [1,  -2], :cost 70}    ; L2 + L3 + L6      = 30 + 20 + 20      = 70
+            {:model [-1, -2], :cost 90}    ; L1 + L3           = 70 + 20           = 90
+            {:model [1,   2], :cost 120}   ; L2 + L4 + L7      = 30 + 80 + 10      = 120
+            {:model [-1,  2], :cost 240}]  ; L1 + L4 + L5      = 70 + 80 + 90      = 240
            (explain/run-rc2-problem (wcnf/WCNF nil :from_string simplest-maxsat) 10)))
-    (is (= [{:model [ 1,-2, -3, -4, -5,  6, -7, -8, -9], :cost 238}
-            {:model [-1, 2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
-            {:model [ 1,-2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
-            {:model [-1, 2, -3, -4, -5,  6, -7, -8, -9], :cost 322}
-            {:model [-1, 2, -3, -4, -5, -6,  7, -8, -9], :cost 322}
-            {:model [ 1, 2, -3, -4, -5,  6, -7, -8, -9], :cost 330}
-            {:model [ 1,-2, -3,  4, -5,  6, -7, -8, -9], :cost 330}
-            {:model [ 1,-2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
-            {:model [-1, 2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
-            {:model [ 1, 2, -3, -4, -5,  6,  7, -8, -9], :cost 366}]
+    (is (= [{:model [ 1, -2, -3, -4, -5,  6, -7, -8, -9], :cost 238}
+            {:model [-1,  2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
+            {:model [ 1, -2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
+            {:model [-1,  2, -3, -4, -5,  6, -7, -8, -9], :cost 322}
+            {:model [-1,  2, -3, -4, -5, -6,  7, -8, -9], :cost 322}
+            {:model [ 1,  2, -3, -4, -5,  6, -7, -8, -9], :cost 330}
+            {:model [ 1, -2, -3,  4, -5,  6, -7, -8, -9], :cost 330}
+            {:model [ 1, -2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
+            {:model [-1,  2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
+            {:model [ 1,  2, -3, -4, -5,  6,  7, -8, -9], :cost 366}]
            (explain/run-rc2-problem (wcnf/WCNF nil :from_string another-maxsat) 10)))))
 
 (def tseitin-2
@@ -153,14 +181,45 @@
           {:model [-1, 2, -3,  4, -5, -6, -7,  8, -9, -10, -11,  12, -13], :cost 800}]
          (explain/run-rc2-problem (wcnf/WCNF nil :from_string tseitin-4) 10))))
 
-;;;==================================== Test BALP-based MPE =====================================
-;;; No observations. Good for ...calculating probabilities?
-;;; (report-results (explain '(dee foo) et/park-kb))
-(defkb park-kb  ; ToDo: Write a test that uses this KB.
-  "A KB for testing the problem from Park (2002) Using Weighted MAX-SAT engines to solve MPE."
-  :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}
-          {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]
-  :facts [{:prob 0.3 :fact (cee ?x)}])
+;;;==================================== Meaning of clauses  =====================================
+(defkb park-kb
+  "A KB for testing the problem from Park (2002) 'Using Weighted MAX-SAT engines to solve MPE'."
+;;;   C |  P(C)                       C    D   |  P(D|C)   (D is unlikely, C helps a little).
+;;;  ---+------                      ----------+----------
+;;;   c |  0.3                        c    d   |   0.2         c ->  d
+;;;   d |  0.7                        c   -d   |   0.8    INV  c ->  d
+;;;                                  -c    d   |   0.1        -c ->  d
+;;;                                  -c   -d   |   0.9    INV -c ->  d
+  :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
+          {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
+    :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
+
+(deftest park-concept
+  (testing "Demonstrating the concept of using a MAXSAT solver for MPE."
+    (testing "The encoding to WDIMACS (whatever that is) using report-problem, which isn't legal WDIMACS."
+      (is (= (->> ["p wcnf 4 14 737"
+                   "737                  3    4    0"
+                   "737                 -3   -4    0"
+                   "737        1              4    0"
+                   "737             2    3         0"
+                   "737       -1         3         0"
+                   "737            -2         4    0"
+                   ""
+                   "1 : 36       1         0 c pc-2-fa (cee foo)"
+                   "2 : 120      1         0 c pc-4-fa-inv (cee foo) | INV"
+                   "3 : 36      -1         0 c pc-4-fa (cee foo)"
+                   "4 : 120     -1         0 c pc-2-fa-inv (cee foo) | INV"
+                   "5 : 11       1         0 c pc-3-ru :rule-2 {?x-r2 foo} (dee foo) | REDU (not (dee foo))"
+                   "6 : 230      1         0 c pc-3-ru-inv :rule-2 {?x-r2 foo} (dee foo) | INV | REDU (dee foo)"
+                   "7 : 161     -1         0 c pc-1-ru-inv :rule-1 {?x-r1 foo} (dee foo) | INV | REDU (dee foo)"
+                   "8 : 22      -1         0 c pc-1-ru :rule-1 {?x-r1 foo} (dee foo) | REDU (not (dee foo))"]
+                  (interpose "\n")
+                  (apply str))
+             (let [log-vec (atom [])]
+               (binding [log/*config* (assoc log/*config* :appenders {:println {:enabled? true :fn #(swap! log-vec conj (-> % :vargs first))}})]
+                 (with-out-str (-> (explain '(dee foo) park-kb) (explain/report-problem *out*))))))))))
+
+;;;==================================== Simple end-to-end MPE =====================================
 
 ;;; My interpretation is the ProbLog interpretation.
 ;;; The ProbLog reading of these is CAUSAL: If +b ^ +e, this  causes an alarm to be true with probabiility 0.9.
@@ -224,91 +283,43 @@
   :facts [{:prob 0.7 :fact (burglary ?loc)}
           {:prob 0.2 :fact (earthquake ?loc)}])
 
-;;; (def abc (explain '(D foo) et/abcd-kb))
-(defkb abcd-kb
-  "A simple KB."
-  :rules [{:prob 0.9
-           :head (D ?x)
-           :tail [(A ?x) (B ?x)]}
-          {:prob 0.9
-           :head (D ?y)
-           :tail [(A ?y) (C ?y)]}]
-  :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.98 :fact (B ?b)}
-          {:prob 0.97 :fact (C ?c)}])
-
-(defkb abcd2-kb
-  "Another simple KB."
-  :rules [{:prob 0.9
-           :head (D ?x)
-           :tail [(A ?x) (B ?x)]}
-          {:prob 0.9
-           :head (D ?y)
-           :tail [(A ?y) (C ?y)]}]
-  :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.97 :fact (B ?b)}
-          {:prob 0.98 :fact (C ?c)}])
-
-(defkb one-rule-kb
-  "A KB with one rule."
-  :rules [{:prob 0.9
-           :head (D ?x)
-           :tail [(A ?x) (B ?x)]}]
-  :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.97 :fact (B ?b)}
-          {:prob 0.98 :fact (C ?c)}])
-
-(deftest simple-fact-probabilities
-  (testing "Testing that one rule works. Note antecedent C is not used. Phew!"
-    (is (= [{:cost 245, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
-           (-> (explain '(D foo) one-rule-kb) :mpe))))
-  (testing "Testing that two proofs that only differ by the probability of one antecedent are ordered correctly."
-    (testing "Testing one ordering"
-    (is (= [{:cost 595, :proof-id :proof-1, :pvec '((A foo) (B foo))}
-            {:cost 636, :proof-id :proof-2, :pvec '((A foo) (C foo))}]
-           (-> (explain '(D foo) abcd-kb) :mpe))))
-    (testing "Testing same two proofs, different ordering."
-      (is (= [{:cost 595, :proof-id :proof-2, :pvec '((A foo) (C foo))}
-              {:cost 636, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
-             (-> (explain '(D foo) abcd2-kb) :mpe))))))
-
 ;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
-(defkb slow-road-even-kb
+(defkb road-is-slow-even-kb
   "The ProbLog blocked road KB. Everything is equal, thus heavy-snow is just as likely as accident."
   :rules  [{:prob 0.5
-            :head (slow-road ?loc)
-            :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
+            :head (road-is-slow ?loc)
+            :tail [(heavy-snow ?loc) (bad-road-for-snow ?loc)]}
            {:prob 0.5
-            :head (slow-road ?loc)
+            :head (road-is-slow ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow plaza)}
-          {:prob 0.2 :fact (drive-hazard ?x)}
+  :facts [{:prob 0.2 :fact (heavy-snow mt-pass)}
+          {:prob 0.2 :fact (bad-road-for-snow ?x)}
           {:prob 0.2 :fact (accident ?x)}
           {:prob 0.2 :fact (clearing-wreck ?x ?y)}])
 
-(defkb slow-road-kb
+(defkb road-is-slow-kb
   "The blocked road KB. From a ProbLog example, I think."
   :rules  [{:prob 0.8 ; Thus it is the more reliable rule.
-            :head (slow-road ?loc)
-            :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
+            :head (road-is-slow ?loc)
+            :tail [(heavy-snow ?loc) (bad-road-for-snow ?loc)]}
            {:prob 0.5
-            :head (slow-road ?loc)
+            :head (road-is-slow ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow plaza)}
-          {:prob 0.2 :fact (drive-hazard ?x)}
+  :facts [{:prob 0.2 :fact (heavy-snow mt-pass)}
+          {:prob 0.2 :fact (bad-road-for-snow ?x)}
           {:prob 0.2 :fact (accident ?x)}
           {:prob 0.2 :fact (clearing-wreck ?x ?y)}])
 
-(defkb slow-road-assumption-kb
-  "blocked road with (clearing-wreck $crew-r2-skolem-1 plaza) (default assumption prob is 0.10) thus heavy-snow should be favored."
+(defkb road-is-slow-assumption-kb
+  "blocked road with (clearing-wreck $crew-r2-skolem-1 mt-pass) (default assumption prob is 0.10) thus heavy-snow should be favored."
   :rules  [{:prob 0.5
-            :head (slow-road ?loc)
-            :tail [(heavy-snow ?loc) (drive-hazard ?loc)]}
+            :head (road-is-slow ?loc)
+            :tail [(heavy-snow ?loc) (bad-road-for-snow ?loc)]}
            {:prob 0.5
-            :head (slow-road ?loc)
+            :head (road-is-slow ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow plaza)}
-          {:prob 0.2 :fact (drive-hazard ?x)}
+  :facts [{:prob 0.2 :fact (heavy-snow mt-pass)}
+          {:prob 0.2 :fact (bad-road-for-snow ?x)}
           {:prob 0.2 :fact (accident ?x)}]) ; Dropped clearing-wreck.
 
 ;;; (def jjj (explain '(groupby Table-1 COLA COLB) et/job-kb))
@@ -372,7 +383,7 @@
           {:prob 0.01 :head (injective ?f)          :tail [(func1 ?f ?x ?y) (indexSet ?x) (indexSet ?y) (biggerSet ?x ?y)]}
           {:prob 0.60 :head (objectiveFnVal ?x)     :tail [(decisionVar ?x)                               (contributesToObj ?x)]}
           {:prob 0.60 :head (objectiveFnVal ?y)     :tail [(optLocalVar ?y) (decisionVar ?x) (func ?x ?y) (contributesToObj ?y)]}
-          {:prob 0.99 :head (not (biggerSet ?x ?y)) :tail [(biggerSet ?y ?x)]}]
+          {:prob 0.99 :head (biggerSet ?x ?y)       :tail [(not (biggerSet ?y ?x))]}] ; 2023 head was negated. ToDo: syntax to make this a hard clause.
   :observations [(optLocalVar ActualEffort)
                  (costConcept CostTable)
                  (resourceConcept Workers)
@@ -413,43 +424,38 @@
           {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
 
 
-(defn simple-mpe
-  "Pull out model and cost for testing."
-  [kb]
-  (->> kb :mpe (map #(dissoc % :proof-id)) (sort-by :cost) vec))
-
-;;;==================================== Tests ======================================================
+;;;------ Tests for the above KBs
 (deftest good-explanations
   (testing "That MPE is getting good results."
     (testing "Example from Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"
       #_(is (= :to-do
-             (-> (explain '(dee foo) park-kb) simple-mpe)))
+             (-> (explain '(dee foo) park-kb) filter-to-simple-mpe)))
 
     #_(testing "ToDo: describe"
         #_(is (= #{{:model [  1  -2] :cost    80}
                    {:model [  1   2] :cost   208}
                    {:model [ -1   2] :cost   511}}
-                 (-> (explain '(alarm plaza) alarm-kb) simple-mpe)))) ; <============== compare lists problem; Seem to be playing games!
+                 (-> (explain '(alarm plaza) alarm-kb) filter-to-simple-mpe)))) ; <============== compare lists problem; Seem to be playing games!
 
     (testing "Testing that where there are no difference in probability, there are no differences in cost."
-      (is (= [{:cost 504, :pvec '[(accident plaza) (clearing-wreck ?x-f4 plaza)]}
-              {:cost 504, :pvec '[(heavy-snow plaza) (drive-hazard plaza)]}]
-             (-> (explain '(slow-road plaza) slow-road-even-kb) simple-mpe))))
+      (is (= [{:cost 504, :pvec '[(accident mt-pass) (clearing-wreck ?x-f4 mt-pass)]}
+              {:cost 504, :pvec '[(heavy-snow mt-pass) (bad-road-for-snow mt-pass)]}]
+             (-> (explain '(road-is-slow mt-pass) road-is-slow-even-kb) filter-to-simple-mpe))))
 
-    (testing "Testing rule probabilities. The rule for heavy-snow is more reliable."
-      (is (= [{:cost 504, :pvec '[(accident plaza) (clearing-wreck ?x-f4 plaza)]}
-              {:cost 549, :pvec '[(heavy-snow plaza) (drive-hazard plaza)]}]
-             (-> (explain '(slow-road plaza) slow-road-kb) simple-mpe))))
+    (testing "Testing rule probabilities. The rule for heavy-snow is more reliable." ; <============ WRONG!
+      (is (= [{:cost 504, :pvec '[(accident mt-pass) (clearing-wreck ?x-f4 mt-pass)]}
+              {:cost 549, :pvec '[(heavy-snow mt-pass) (bad-road-for-snow mt-pass)]}]
+             (-> (explain '(road-is-slow mt-pass) road-is-slow-kb) filter-to-simple-mpe))))
 
     (testing "Favor explanations that don't have a default low-probability assumption. (It warns about it.)"
-      (is (= [{:cost 493, :pvec '[(heavy-snow plaza) (drive-hazard plaza)]}
-              {:cost 573, :pvec '[(accident plaza) (clearing-wreck $crew-r2-skolem-1 plaza)]}]
-             (-> (explain '(slow-road plaza) slow-road-assumption-kb) simple-mpe))))
+      (is (= [{:cost 493, :pvec '[(heavy-snow mt-pass) (bad-road-for-snow mt-pass)]}
+              {:cost 573, :pvec '[(accident mt-pass) (clearing-wreck $crew-r2-skolem-1 mt-pass)]}]
+             (-> (explain '(road-is-slow mt-pass) road-is-slow-assumption-kb) filter-to-simple-mpe))))
 
     #_(testing "ToDo: describe"
         (is (=  [{:model [ 1 -2 -3  4 -5 -6], :cost 220}
                  {:model [-1  2  3 -4  5  6], :cost 676}]
-                (-> (explain '(groupby Table-1 COLA COLB) job-kb) simple-mpe))))
+                (-> (explain '(groupby Table-1 COLA COLB) job-kb) filter-to-simple-mpe))))
 
     #_(testing "ToDo: Describe -- Without inverse facts and assumptions, this one just disappears!"
         (is (= #{{:model [-1], :cost 51} {:model [1], :cost 92}}
@@ -460,12 +466,60 @@
                  {:model [-1 -2 3 4], :cost 73}
                  {:model [-1  2 3 4], :cost 575}
                  {:model [ 1  2 3 4], :cost 1036}}
-               (->> (explain '(allDifferent doesJob) concepts2-kb) :mpe (map #(dissoc % :prob)) set))))
+               (-> (explain '(allDifferent doesJob) concepts2-kb) filter-to-simple-mpe))))
     (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
       (is (= [{:cost 439, :pvec '((backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2))}
               {:cost 813, :pvec '((failing-sensor robot-8 joint-2) (bad-sensor-processing robot-8))}]
-             (-> (explain '(inaccurate-tcp robot-8) mfglet-kb) simple-mpe)))))))
+             (-> (explain '(inaccurate-tcp robot-8) mfglet-kb) filter-to-simple-mpe)))))))
 
+
+;;;==================================== Other one- and two-rule MPE =====================================
+(defkb one-rule-kb
+  "A KB with one rule."
+  :rules [{:prob 0.9
+           :head (D ?x)
+           :tail [(A ?x) (B ?x)]}]
+  :facts [{:prob 0.99 :fact (A ?a)}
+          {:prob 0.97 :fact (B ?b)}
+          {:prob 0.98 :fact (C ?c)}])
+
+(defkb two-rule-kb
+  "A simple KB."
+  :rules [{:prob 0.9
+           :head (D ?x)
+           :tail [(A ?x) (B ?x)]}
+          {:prob 0.9
+           :head (D ?y)
+           :tail [(A ?y) (C ?y)]}]
+  :facts [{:prob 0.99 :fact (A ?a)}
+          {:prob 0.98 :fact (B ?b)}
+          {:prob 0.97 :fact (C ?c)}])
+
+(defkb another-two-rule-kb
+  "Another simple KB."
+  :rules [{:prob 0.9
+           :head (D ?x)
+           :tail [(A ?x) (B ?x)]}
+          {:prob 0.9
+           :head (D ?y)
+           :tail [(A ?y) (C ?y)]}]
+  :facts [{:prob 0.99 :fact (A ?a)}
+          {:prob 0.97 :fact (B ?b)}
+          {:prob 0.98 :fact (C ?c)}])
+
+(deftest simple-fact-probabilities
+  (testing "Testing that one rule works. Note antecedent C is not used. Phew!"
+    (is (= [{:cost 245, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
+           (-> (explain '(D foo) one-rule-kb) :mpe))))
+  (testing "Testing that two proofs that only differ by the probability of one antecedent are ordered correctly."
+    (testing "Testing one ordering"
+    (is (= [{:cost 595, :proof-id :proof-1, :pvec '((A foo) (B foo))}
+            {:cost 636, :proof-id :proof-2, :pvec '((A foo) (C foo))}]
+           (-> (explain '(D foo) two-rule-kb) :mpe))))
+    (testing "Testing same two proofs, different ordering."
+      (is (= [{:cost 595, :proof-id :proof-2, :pvec '((A foo) (C foo))}
+              {:cost 636, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
+             (-> (explain '(D foo) another-two-rule-kb) :mpe))))))
 
 ;;; In ~is~ the correct one goes first in the =. (is (= correct-value generated-value))
 #_(deftest test-binding-sets
@@ -475,9 +529,9 @@
     (is (= '[{?f doesJob, ?y Jobs, ?x Workers}]
            (explain/binding-sets-aux '[{?f doesJob} {?f doesJob, ?x Workers} {?f doesJob, ?y Jobs}])))))
 
-;;; POD pprocess-prv not defined
+;;; ToDo: pprocess-prv not defined
 #_(deftest test-postprocessed-proof-1
-  (testing "that adductive logic proofs on a simple example look okay before post-processing."
+  (testing "Testing that adductive logic proofs on a simple example look okay before post-processing."
     (is (= '{:prv (designVar CostTable),
              :proofs
              [{:fact
@@ -493,61 +547,49 @@
                                       :using "obs-1"},
                                      :subs {?x CostTable}}]})))))
 
-(deftest test-postprocessed-proof-2 (is true))
-#_(deftest test-postprocessed-proof-2
-  (testing "that abductive logic proofs on a simple example look okay."
-    (let [result (explain '(slow-road plaza) slow-road-kb)]
-      (is (= '({:using-rule :rule-1,
-                :rule-subs {?loc-r1 plaza},
-                :prob 0.8,
-                :lhs {:pred (slow-road ?loc-r1), :neg? false},
-                :rhs
-                ({:pred (heavy-snow ?loc-r1), :neg? false}
-                 {:pred (drive-hazard ?loc-r1), :neg? false}),
-                :cnf
-                [{:pred (slow-road plaza), :neg? false}
-                 {:pred (heavy-snow plaza), :neg? true}
-                 {:pred (drive-hazard plaza), :neg? true}],
-                :steps
-                [{:prv (heavy-snow plaza),
-                  :proofs
-                  [{:fact
-                    {:cnf [{:pred (heavy-snow plaza), :neg? false}],
-                     :prob 0.2,
-                     :using :fact-1}}]}
-                 {:prv (drive-hazard plaza),
-                  :proofs
-                  [{:fact
-                    {:cnf [{:pred (drive-hazard plaza), :neg? false}],
-                     :prob 0.2,
-                     :using :fact-2}}]}]}
-               {:using-rule :rule-2,
-                :rule-subs {?loc-r2 plaza, ?crew-r2 $crew-r2-skolem-1},
-                :prob 0.5,
-                :lhs {:pred (slow-road ?loc-r2), :neg? false},
-                :rhs
-                ({:pred (accident ?loc-r2), :neg? false}
-                 {:pred (clearing-wreck ?crew-r2 ?loc-r2), :neg? false}),
-                :cnf
-                [{:pred (slow-road plaza), :neg? false}
-                 {:pred (accident plaza), :neg? true}
-                 {:pred (clearing-wreck $crew-r2-skolem-1 plaza), :neg? true}],
-                :steps
-                [{:prv (accident plaza),
-                  :proofs
-                  [{:fact
-                    {:cnf [{:pred (accident plaza), :neg? false}],
-                     :prob 0.2,
-                     :using :fact-3}}]}
-                 {:prv (clearing-wreck ?crew-r2 plaza),
-                  :proofs
-                  [{:fact
-                    {:cnf
-                     [{:pred (clearing-wreck $crew-r2-skolem-1 plaza),
-                       :neg? false}],
-                     :prob 0.2,
-                     :using :fact-4}}]}]})
-             (:all-proofs result))))))
+(deftest postprocessed-proof-2
+  (testing "Testing that abductive logic proofs on a simple example look okay."
+    (is (= '{:prv (road-is-slow mt-pass),
+             :top? true,
+             :caller {:bindings {}},
+             :proofs
+             [{:rule-used? true,
+               :rule-used :rule-1,
+               :proving (road-is-slow mt-pass),
+               :rhs-queries {:rhs ((heavy-snow mt-pass) (bad-road-for-snow mt-pass)), :bindings {?loc-r1 mt-pass, ?x-f2 mt-pass}},
+               :decomp
+               [{:prv (heavy-snow mt-pass),
+                 :caller {:rule-id :rule-1, :sol (heavy-snow mt-pass), :bindings {?loc-r1 mt-pass}},
+                 :proofs [{:prvn (heavy-snow mt-pass), :fact-used? true}]}
+                {:prv (bad-road-for-snow mt-pass),
+                 :caller {:rule-id :rule-1, :sol (bad-road-for-snow mt-pass), :bindings {?loc-r1 mt-pass}},
+                 :proofs [{:prvn (bad-road-for-snow mt-pass), :bindings {?x-f2 mt-pass}, :fact-used? true}]}]}
+              {:rule-used? true,
+               :rule-used :rule-2,
+               :proving (road-is-slow mt-pass),
+               :rhs-queries
+               {:rhs ((accident mt-pass) (clearing-wreck ?crew-r2 mt-pass)), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass, ?crew-r2 ?x-f4, ?y-f4 mt-pass}},
+               :decomp
+               [{:prv (accident mt-pass),
+                 :caller {:rule-id :rule-2, :sol (accident mt-pass), :bindings {?loc-r2 mt-pass}},
+                 :proofs [{:prvn (accident mt-pass), :bindings {?x-f3 mt-pass}, :fact-used? true}]}
+                {:prv (clearing-wreck ?crew-r2 mt-pass),
+                 :caller {:rule-id :rule-2, :sol (clearing-wreck ?crew-r2 mt-pass), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass}},
+                 :proofs [{:prvn (clearing-wreck ?x-f4 mt-pass), :bindings {?crew-r2 ?x-f4, ?y-f4 mt-pass}, :fact-used? true}]}]}
+              {:rule-used? true,
+               :rule-used :rule-2,
+               :proving (road-is-slow mt-pass),
+               :rhs-queries
+               {:rhs ((accident mt-pass) (clearing-wreck ?crew-r2 mt-pass)), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass, ?crew-r2 ?x-f4, ?y-f4 mt-pass}},
+               :decomp
+               [{:prv (accident mt-pass),
+                 :caller {:rule-id :rule-2, :sol (accident mt-pass), :bindings {?loc-r2 mt-pass}},
+                 :proofs [{:prvn (accident mt-pass), :bindings {?x-f3 mt-pass}, :fact-used? true}]}
+                {:prv (clearing-wreck ?crew-r2 mt-pass),
+                 :caller {:rule-id :rule-2, :sol (clearing-wreck ?crew-r2 mt-pass), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass}},
+                 :proofs [{:prvn (clearing-wreck ?x-f4 mt-pass), :bindings {?crew-r2 ?x-f4, ?y-f4 mt-pass}, :fact-used? true}]}]}]}
+             (-> (explain '(road-is-slow mt-pass) road-is-slow-kb) :raw-proofs)))))
+
 
 ;;; A <- B C
 ;;; A <- D E
@@ -592,6 +634,9 @@
               (explain/cprob p-kb '(not (cee $x1-skolem-1))))
            0.631))))
 
+;;; Namespaces meanings:
+;;;    py - an identifier (variable or function) in a python jupyter notebook.
+;;;    ta - type analysis.
 (def pre-example
   '({:steps [{:prv (ta/conceptType ta/DemandType demand),
               :proofs ({:steps
@@ -667,7 +712,7 @@
   :rules [{:prob 0.95 :head (ta/conceptQuery ?x) :tail [(ta/conceptType ta/DemandType          ?x)]}
           {:prob 0.95 :head (ta/conceptQuery ?x) :tail [(ta/conceptType ta/WorkerType          ?x)]}
           {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(ta/conceptVar   ?type ?x)]}
-          {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(ta/simMatchVar ?y ?type) ; POD I swapped order. See tests and notes 2020-07-26
+          {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(ta/simMatchVar ?y ?type) ; ToDo: I swapped order. See tests and notes 2020-07-26
                                                                      (py/traceVar ?x ?y)]}     ; This might just end up with e.g. (py/traceVar demand demand)
           {:prob 0.80 :head (ta/conceptVar   ?type  ?x)      :tail [(ta/isType ?type) (ta/simMatchVar ?x ?type)]}
           ;; not-inv? not useful? It is hard to describe. No penalty for not meeting it???
@@ -809,14 +854,13 @@
                   ((p-other x-1 y-1))])
            (set (proof-one-step proof-test-kb-1 '(p-lhs x-1 y-1)))))))
 
-;;; POD There might be more to think about with respect to how I do these.
-;;;     For example, should I treat a skolem like a cvar?
+;;; ToDo: There might be more to think about with respect to how I do these.
+;;;       For example, should I treat a skolem like a cvar?
 ;;; 2021-04-27 Commented out because explain/get-assumption doesn't seem to exist anymore.
 #_(deftest assumptions-are-memoized
   (testing "that you get the same assumption when you call for something similar twice."
     (is (= (explain/get-assumption proof-test-kb-1 (explain/varize '(foo ?x)))
            (explain/get-assumption proof-test-kb-1 (explain/varize '(foo ?x)))))))
-
 
 ;;;=============================================================================================================
 (defkb rule-product-kb ; ToDo: Write a test that uses this KB.
@@ -1000,6 +1044,7 @@
 ;;; However, some such as black-listed ta/isType might not be useful because the reasoner doesn't assume
 ;;; in places where some value exists.
 (defn bautista-params
+  "Excepting 'requires-evidence?' these are probably hacks!" ; ToDo: If not a hack r-e? and b-l-p? then need it in defkb.
   [kb+setup]
   (assoc-in kb+setup [:kb :params]
             (merge explain/default-params

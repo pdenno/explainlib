@@ -20,12 +20,22 @@
 (def diag2 (atom {}))
 (def diag  (atom {}))
 
-;;; POD ToDo: kb should disallow cycles in rules.
+;;; facts            = Predicates with associated probability.
+;;; observations     = Predicates without associated probability. These are used to simply proofs. See use of :remove? in several places.
+;;; assumptions      = Predicates with associated probability that will be generated to complete the RHS of a rule in the absence of suitable facts or observations.
+;;; skolem           = A predicate role that is generated where the a does not otherwise have a binding; it has existential quantification.
+;;; ground fact      = A fact that has no unbound roles, skolems allowed.
+;;; literal          = A predicate or its negative (not).
+;;; non-empty clause = A clause containint at least one literal
+;;; horn clause      = A non-empty disjunctive clause with at most one positive literal.
+;;; definite clause  = A non-empty disjunctive clause with exactly one positive literal.
+
+;;; ToDo: kb should disallow cycles in rules.
 (s/def ::neg?    boolean?)
 (s/def ::pred    (s/and seq? #(-> % first symbol?) #(>= (count %) 2)))
 (s/def ::literal (s/keys :req-un [::pred ::neg?]))
 (s/def ::clause  (s/and vector? (s/coll-of ::literal)))
-;;; BTW, the empty clause is false. (It is the identity in the monoid ({T,F} V).)
+;;; BTW, the empty clause is false. (It is the identity in the monoid ({T,F} \/).)
 (s/def ::non-empty-clause  (s/and vector? (s/coll-of ::literal :min-size 1)))
 (s/def ::horn-clause     (s/and ::non-empty-clause #(<= (->> % (remove :neg?) count) 1)))
 (s/def ::definite-clause (s/and ::non-empty-clause #(== (->> % (remove :neg?) count) 1)))
@@ -33,12 +43,12 @@
                                  (s/keys :req-un [::cnf]) ; recalled-facts (from proofs) are like this.
                                 #(== (-> % :cnf count) 1)))
 
-;; POD Non-positional CNF will need some thought. See defn hard-clauses
+;; ToDo: Non-positional CNF will need some thought. See defn hard-clauses
 (s/def ::fact        (s/and ::falsifiable #(-> % :cnf first :neg? false?)))
 (s/def ::ground-fact (s/and ::fact (fn [f] (not-any? #(cvar? %) (-> f :cnf first :pred)))))
 (s/def ::observation ::ground-fact)
 (s/def ::assumption  ::ground-fact)
-(s/def ::head    ::pred)
+(s/def ::head    ::pred) ; ToDo: Ensure head is positive.
 (s/def ::tail    (s/and vector? (s/coll-of ::pred :min-count 1)))
 (s/def ::prob    (s/double-in :min 0.0 :max 1.0))
 (s/def ::id      keyword?)
@@ -291,60 +301,63 @@
         black-listed-pred?   ((-> kb :params :black-listed-preds) pred-sym)]
     (cond not-yet-implemented?              (do (log/warn "using not-yet-implemented? for pred-sym" pred-sym) (-> kb :params :black-list-prob))
           black-listed-pred?                (do (log/warn "using black-list-pred? for pred-sym" pred-sym)     (-> kb :params :black-list-prob))
-          requires-evidence?                (do (log/warn "using requires-evidence? for pre-dsym" pred-sym)   0.01) ; <================================ ToDo: Is it used? ;default-similarity-assumption-probability ; 0.001
+          requires-evidence?                (do (log/warn "using requires-evidence? for pre-dsym" pred-sym)   0.01)
           (pred-names-a-rule? pred-sym kb)  (-> kb :params :pred-names-rule-prob)
           :else                             (do (log/warn "Using default assume-prob for" pred-sym)           (-> kb :params :default-assume-prob)))))
 
 (defn pclause-for-non-rule
-  "Create pclauses for non-rule proof-vec steps."
+  "Return a pclause for non-rule proof-vec step, except when it is a negated fact, then return nil."
   [kb proof-id step]
+  (reset! diag kb)
   (let [ground-atom (:step step)
+        negated? (= 'not (first ground-atom))
+        ground-atom (if negated? (second ground-atom) ground-atom)
         facts (-> kb :facts vals)]
     (as-> {:using-proof proof-id} ?pc
-      (cond (:observation? step)
-            (-> ?pc
-                (assoc :observation? true)
-                (assoc :form ground-atom)
-                (assoc :remove? true)
-                (assoc :prob 1.0)
-                (assoc :comment (cl-format nil "OB ~A" (:step step))))
-          (:fact? step) ; POD no negative facts.
-          (let [fact (some #(when (uni/unify  ground-atom (-> % :cnf first :pred)) %) facts)]
-            ;#p fact
-            (-> fact
-                (assoc :fact? true)
-                (assoc :cnf (vector {:pred ground-atom :neg? false})) ; want the ground atom
-                (assoc :using-proof (:using-proof ?pc))
-                (assoc :comment (cl-format nil "~A" ground-atom))))
-          (:assumption? step)
-          (-> ?pc
-              (assoc :assumption? true)
-              (assoc :prob (assumption-prob (first ground-atom) kb))
-              (assoc :cnf (vector {:pred ground-atom :neg? false}))
-              (assoc :comment (cl-format nil "~A" ground-atom)))))))
+      (cond (:observation? step)          (-> ?pc
+                                              (assoc :observation? true)
+                                              (assoc :form ground-atom)
+                                              (assoc :remove? true)
+                                              (assoc :prob 1.0)
+                                              (assoc :comment (cl-format nil "OB ~A" (:step step))))
+            ;; ToDo: No negative facts.
+            (:fact? step)                 (let [fact (some #(when (uni/unify  ground-atom (-> % :cnf first :pred)) %) facts)]
+                                            (-> fact
+                                                (assoc :fact? true)
+                                                (assoc :cnf (vector {:pred ground-atom :neg? negated?})) ; want the ground atom
+                                                (assoc :using-proof (:using-proof ?pc))
+                                                (assoc :comment (cl-format nil "~A" ground-atom))))
+            (:assumption? step)           (-> ?pc
+                                              (assoc :assumption? true)
+                                              (assoc :prob (assumption-prob (first ground-atom) kb))
+                                              (assoc :cnf (vector {:pred ground-atom :neg? false}))
+                                              (assoc :comment (cl-format nil "~A" ground-atom)))))))
 
 (defn pclauses-for-rule
   "Return
     (1) a pclauses for the rule, showing all bindings used and the proof from which it is being derived
     (2) the pvec with the head and non-rule steps consumed removed."
   [kb steps proof-id]
+  (reset! diag kb)
   (let [heads (->> kb :rules vals (map :head))
         rule-id (-> steps first :rule-id)
         rule (-> kb :rules rule-id)
         rule-preds (into (vector (:head rule)) (:tail rule))
-        ;; POD This isn't perfect (mutually recursive rules might screw it up), but I'm avoiding those.
+        ;; ToDo: This isn't perfect (mutually recursive rules might screw it up), but I'm avoiding those.
         ground-atoms (reduce (fn [res rule-pred]
                                (conj res (some #(when (uni/unify rule-pred (:step %)) (:step %)) steps)))
                              []
                              rule-preds)
-        bindings (reduce (fn [binds [pred fact]] (merge binds (uni/unify pred fact)))
+        bindings (reduce (fn [binds [pred fact]]
+                           (let [pred (if (= 'not (first pred)) (second pred) pred)]
+                             (merge binds (uni/unify pred fact))))
                          {}
                          (map #(vector %1 %2) rule-preds ground-atoms))
         rule-pclause (-> rule
+                         (dissoc :head :tail :id)
                          (assoc :rule? true)
                          (assoc :using-proof proof-id)
-                         (assoc :bindings bindings) ; POD I don't know that it is useful, but bindings have been such a problem...
-                         (dissoc :head :tail :id)
+                         (assoc :bindings bindings) ; ToDo: I don't know that it is useful, but bindings have been such a problem...
                          (assoc :from-rule rule-id)
                          (update :cnf (fn [cnf] (mapv (fn [term] (update term :pred #(uni/subst % bindings))) cnf)))
                          (assoc :comment (str rule-id " "  bindings  " " (uni/subst (:head rule) bindings))))
@@ -358,7 +371,7 @@
      :steps
      (if (empty? non-rule-steps-used)
        (-> steps rest vec)
-       (let [remaining (atom (-> steps rest vec))] ; POD there is probably a better way to 'remove-first'
+       (let [remaining (atom (-> steps rest vec))]
          (doseq [rem non-rule-steps-used]
            (let [pos (reduce (fn [pos ix]
                                (cond pos pos
@@ -374,6 +387,7 @@
 (defn collect-from-pvec
   "Loop through the pvec consuming steps and pushing pclauses."
   [kb pvec]
+  (reset! diag kb)
   (let [proof-id (:proof-id pvec)]
     (loop [steps (:steps pvec)
            collected []
@@ -387,6 +401,7 @@
 (defn collect-pclauses
   "Collect pclauses noting with the set :used-in which proofs they are used-in."
   [kb]
+  (reset! diag kb)
   (let [pclause-count (-> kb :vars :pclause-count)
         pclauses-by-cnf
         (as-> (-> kb :proof-vecs vals) ?p
@@ -593,7 +608,7 @@
                 (update :comment #(str % " | INV"))))]
     (map pinv (->> kb :pclauses (filter :fact?)))))
 
-;;; POD This approach means no need to create the inverse rules in defkb!
+;;; ToDo: This approach means no need to create the inverse rules in defkb!
 (defn inverse-rules
   "Return a vector inverses of the assumptions and facts used."
   [kb]
@@ -626,7 +641,7 @@
     (first matching)))
 
 ;;; =================== For performing Python-based RC2 weighted partial MAXSAT analysis
-;;; POD ToDo: change "request" to say "cmd" and the error you get will require (user/restart).
+;;; ToDo: change "request" to say "cmd" and the error you get will require (user/restart).
 ;;; Probably need to abstract out a better send for here and kquery.
 (defn run-rc2-problem
   "Execute the RC2 algorithm ntimes, blocking answers as you go.
@@ -748,7 +763,7 @@
          the proposition to be true. (Encoded as an IF statement. Thus PROP OR any Z not containing prop.)
      (4) roughly num-props clauses that require that if the proposition is true, then so is every solutions using it.
          ('IF prop then Z' written as -prop V Z) "
-  [kb]
+  [kb commented?]
   (let [pids      (:prop-ids kb)
         pids-1    (sets/map-invert pids)
         prop-ids  (vals pids)
@@ -781,7 +796,7 @@
         {:keys [h-wdimacs
                 hard-cost
                 n-hclauses
-                n-vars]} (proof-vec-hard-clause-wdimacs kb)
+                n-vars]} (proof-vec-hard-clause-wdimacs kb commented?)
         p-wdimacs (cond->> (map #(one-clause-wdimacs kb % :commented? commented?) pclauses)
                     commented? (map (fn [num line] (cl-format nil "~2A: ~A" num line))
                                     (range 1 (-> pclauses count inc))))
@@ -829,6 +844,12 @@
         ground-facts (->> kb :pclauses unique-preds)]
     (mapcat #(make-not-head-pclauses kb % ground-facts) not-heads)))
 
+(defn pick-key [form]
+  (cond (:rule-used? form) :rule?
+        (:observation-used? form) :observation?
+        (:fact-used? form) :fact?
+        (:assumption-used? form) :assumption?))
+
 (defn walk-rules
   "Return vectors of vectors of 'path-maps' that result from navigating each proof and collecting what is asserted.
    Each path-map has a :step that describes one step in the naviatation.
@@ -838,17 +859,9 @@
    one for each role-filler, and navigation continues for each new path individually.
    The nodes (:step) navigated are 'heads' 'observations' 'facts' and 'assumptions'."
   [proofs]
-  (letfn [(pick-key [form]
-            (cond (:rule-used? form) :rule?
-                  (:observation-used? form) :observation?
-                  (:fact-used? form) :fact?
-                  (:assumption-used? form) :assumption?))
-          (walk-rule [rule path]
+  (letfn [(walk-rule [rule path]
             (let [rule-id (:rule-used rule)
                   lhs (:proving rule)]
-              ;; 2023-11-29: Variables are allowed here. They are how you get multiple proofs. See core_test (explain/walk-rules tiny)
-              #_(when-not (ground? lhs) ; 2023-11-25 commented out.
-                (throw (ex-info "Predicate is not ground (1)" {:rule rule :path path})))
               (loop [roles (:decomp rule)
                      new-paths (vector (conj path {:step lhs :rule? true :rule-id rule-id}))]
                 (if (empty? roles)
@@ -860,14 +873,10 @@
                              old-path new-paths]
                        (if (:rule-used? rhs-proof)
                          (swap! result into (walk-rule rhs-proof old-path))
-                         (do
-                           #_(when-not (ground? (:prvn rhs-proof)) ; 2023-11-19 ditto here I think!
-                                        ;(reset! diag {:prvn (:prvn rhs-proof)})
-                             (throw (ex-info "Predicate is not ground (2)" {:prvn (:prvn rhs-proof) :rhs-proof rhs-proof})))
-                           (swap! result conj (conj old-path (-> {}
-                                                                 (assoc :step (:prvn rhs-proof))
-                                                                 (assoc (pick-key rhs-proof) true)
-                                                                 (assoc :rule-id rule-id)))))))
+                         (swap! result conj (conj old-path (-> {}
+                                                            (assoc :step (if (:negated-prvn? rhs-proof) `(~'not ~(:prvn rhs-proof)) (:prvn rhs-proof)))
+                                                            (assoc (pick-key rhs-proof) true)
+                                                            (assoc :rule-id rule-id))))))
                      @result))))))]
      (mapcat #(if (:rule-used? %) (walk-rule % []) (vector (:prv %))) proofs)))
 
@@ -1025,7 +1034,7 @@
             []
             pred-data)))
 
-;;; POD I think I might already have something like this!
+;;; ToDo: I think I might already have something like this!
 (defn complete-bindings
   "The Cartesian product created by rule-product can produce binding setst that are not complete. For example:
    ((py/linkBack demand Demand) (ta/conceptRefScheme ta/DemandType demand) (ta/conceptVar ta/DemandType demand) (ta/conceptDF ta/DemandType ?y-r2))
@@ -1037,7 +1046,7 @@
       ;; otherwise inconsistent and will be caught later.
       preds)))
 
-;;; POD I think this needs to handle NOT.
+;;; ToDo: I think this needs to handle NOT.
 ;;; (rule-product eee :rule-4 (:rule-4 (tailtab eee '(ta/conceptType ta/DemandType demand))))
 ;;; (rule-product eee :rule-2 (:rule-2 (tailtab eee '(ta/conceptType ta/DemandType demand))))
 (defn rule-product
@@ -1077,7 +1086,7 @@
   "This is called when prv is the LHS of at least one rule.
    It returns the RHSs that match it and the data, where those RHSs
    could require further expansion of rules or terminate in facts and assumptions.
-   Thus it provides 'one step' of a proof." ; POD I don't think prv needs to be ground
+   Thus it provides 'one step' of a proof." ; ToDo: I don't think prv needs to be ground.
   [kb prv]
   (let [tailtab (tailtab kb prv)]
     (as-> (reduce (fn [res rule-id]
@@ -1088,7 +1097,7 @@
                   {}
                   (keys tailtab)) ?pset-maps
       ?pset-maps
-      ;; If the RHSs include an instance that is all ground, the non-ground ones must go.  POD right?
+      ;; If the RHSs include an instance that is all ground, the non-ground ones must go.  ToDo: right?
       (reduce-kv (fn [res rule-id psets]
                    (if (some ground? psets)
                      (assoc res rule-id (filter ground? psets))
@@ -1172,16 +1181,20 @@
 (defn fact-solve?
   "Return a list of facts if the argument can be proved by reference to a fact."
   [kb prv]
-  (->> kb
-       :facts
-       vals
-       (map #(-> % :cnf first lit2form))
-       (map #(when-let [subs (uni/unify prv %)]
-               (when-not (empty? subs) (merge-bindings subs :source "FACT"))
-               (cond->  {:prvn (uni/subst prv subs)}
-                 (not-empty subs) (assoc :bindings subs)))) ; Bindings need to go into scope, but not here!
-       (remove empty?)
-       not-empty))
+  (let [negated? (= 'not (first prv))
+        prv (if negated? (second prv) prv)]
+    (->> kb
+         :facts
+         vals
+         (map #(-> % :cnf first lit2form))
+         (map #(when-let [subs (uni/unify prv %)]
+                 (when-not (empty? subs) (merge-bindings subs :source "FACT"))
+                 (cond-> {:prvn (if negated?
+                                  `(~'not ~(uni/subst prv subs))
+                                  (uni/subst prv subs))}
+                   (not-empty subs) (assoc :bindings subs)))) ; Bindings need to go into scope, but not here!
+         (remove empty?)
+         not-empty)))
 
 (defn add-assumption
   "Find a kb assumption that will unify with form, or create a new one
@@ -1222,7 +1235,7 @@
       ;; Bindings must match if both are bound.
       (every? (fn [[caller-var called-var]]
                 (if (and (contains? caller-binds caller-var)
-                         (contains? called-binds called-var)) ; POD need I check that the called has more bindings?
+                         (contains? called-binds called-var)) ; ToDo: Check that the called has more bindings?
                   (= (get caller-binds caller-var)
                      (get called-binds called-var))
                   true))
@@ -1239,59 +1252,61 @@
                                        :bindings (:bindings %)}})
           sols))
 
+(declare prove-fact)
+
+(defn rule-solve
+  "Prove prv using a rule. This is mutually recursive with prove-fact."
+  [kb prv caller]
+  (reduce-kv
+   (fn [res rule-id sols]
+     (let [rule (-> kb :rules rule-id)
+           real-sols (consistent-calls? sols caller rule)]
+       (into res
+             (doall
+              ;; A few challenges here:
+              ;; (1) Some rhs-binding-infos won't be legit given the bindings. Thus caller and consistent-calls? above.
+              ;; (2) prv will have the caller's variable naming; needs this rule's var names. (See prv-with-rule-vars.)
+              ;; (3) Progressive binding: the bindings from RHSs on the left need to be substituted into RHSs on the right.
+              (map (fn [sol]
+                     (dbg-scope "Enter rule" rule-id)
+                     (push-scope (merge (top-scope) (:bindings caller)))
+                     (merge-bindings (:bindings sol) :source rule-id)
+                     (let [prv-renamed (prv-with-rule-vars prv rule sol)
+                           rule-result (as-> {} ?r
+                                         (assoc ?r :rule-used? true)
+                                         (assoc ?r :rule-used rule-id)
+                                         (assoc ?r :proving prv-renamed)
+                                         (assoc ?r :rhs-queries sol) ; ToDo: Problem here that each component might be...??? (lost it)
+                                         (assoc ?r :decomp
+                                                (doall (mapv (fn [prv]
+                                                               (let [prv (progressive-bind prv (top-scope))]
+                                                                 (merge-bindings (merge (:bindings sol) (:bindings caller)) :source prv)
+                                                                 (prove-fact kb {:prv prv ; top-scope is thereby progressively updated..., I think!
+                                                                                 :caller {:rule-id rule-id :sol prv :bindings (merge (top-scope) (:bindings sol))}})))
+                                                             (:rhs sol))))
+                                         (update-in ?r [:rhs-queries :bindings] #(merge % (top-scope))))]
+                       (pop-scope)
+                       (dbg-scope "Exit rule" rule-id)
+                       rule-result))
+                   real-sols)))))
+   []
+   ;; These are 'proof-vecs steps' with binding information.
+   (rhs-binding-infos kb prv)))
+
 (defn prove-fact
-  "Recursively develop a tree that can be interpreted to one or more proofs of the argument. "
+  "Recursively develop (this is mutually recursive with rule-solve) a tree that can be interpreted to one or more proofs of the argument. "
   [kb {:keys [prv caller] :as proof}]
   (dbg-scope "PROOF FOR" prv "caller=" caller)
   (let [proof (assoc proof :proofs [])
         heads (->> kb :rules vals (map :head))
         bound (atom nil)]
-    (cond (reset! bound (observation-solve? kb prv))
-          (update proof :proofs into (map #(assoc % :observation-used? true) @bound))
-          (reset! bound (fact-solve? kb prv))
-          (update proof :proofs into (map #(assoc % :fact-used? true) @bound)),
-          (some (fn [head] (uni/unify head prv)) heads)
-          (let [result (update proof :proofs into
-                               (reduce-kv
-                                (fn [res rule-id sols]
-                                  (let [rule (-> kb :rules rule-id)
-                                        real-sols (consistent-calls? sols caller rule)]
-                                    (into res
-                                          (doall
-                                           ;; A few challenges here:
-                                           ;; (1) Some rhs-binding-infos won't be legit given the bindings. Thus caller and consistent-calls? above.
-                                           ;; (2) prv will have the caller's variable naming; needs this rule's var names. (See prv-with-rule-vars.)
-                                           ;; (3) Progressive binding: the bindings from RHSs on the left need to be substituted into RHSs on the right.
-                                           (map (fn [sol]
-                                                  (dbg-scope "Enter rule" rule-id)
-                                                  (push-scope (merge (top-scope) (:bindings caller)))
-                                                  (merge-bindings (:bindings sol) :source rule-id)
-                                                  (let [prv-renamed (prv-with-rule-vars prv rule sol)
-                                                        rule-result (as-> {} ?r
-                                                                        (assoc ?r :rule-used? true)
-                                                                        (assoc ?r :rule-used rule-id)
-                                                                        (assoc ?r :proving prv-renamed)
-                                                                        (assoc ?r :rhs-queries sol) ; POD problem here that each component might be in a
-                                                                        (assoc ?r :decomp
-                                                                               (doall (mapv (fn [prv]
-                                                                                              (let [prv (progressive-bind prv (top-scope))]
-                                                                                                (merge-bindings (merge (:bindings sol) (:bindings caller)) :source prv)
-                                                                                                (prove-fact kb {:prv prv ; top-scope is thereby progressively updated..., I think!
-                                                                                                                :caller {:rule-id rule-id :sol prv :bindings (merge (top-scope) (:bindings sol))}})))
-                                                                                            (:rhs sol))))
-                                                                        (update-in ?r [:rhs-queries :bindings] #(merge % (top-scope))))]
-                                                    (pop-scope)
-                                                    (dbg-scope "Exit rule" rule-id)
-                                                    rule-result))
-                                                real-sols)))))
-                                []
-                                (rhs-binding-infos kb prv)))] ; These are 'proof-vecs steps' with binding information
-            result)
-          :else
-          (let [{:keys [subs form]} (add-assumption kb prv)]
-            (update proof :proofs conj {:assumption-used? true :prvn (uni/subst form subs)})))))
+    (cond (reset! bound (observation-solve? kb prv))       (update proof :proofs into (map #(assoc % :observation-used? true) @bound)),
+          (reset! bound (fact-solve? kb prv))              (update proof :proofs into (map #(assoc % :fact-used? true) @bound)),
+          (some (fn [head] (uni/unify head prv)) heads)    (update proof :proofs into (rule-solve kb prv caller))
+          :else                                            (let [{:keys [subs form]} (add-assumption kb prv)]
+                                                             (update proof :proofs conj {:assumption-used? true :prvn (uni/subst form subs)})))))
 
-;;; POD This might not be sufficient; might need to search deep for bindings???
+;;; ToDo: This might not be sufficient; might need to search deep for bindings???
 (defn find-binding-sets
   "Return a vector of cvar binding maps."
   [proof]
@@ -1307,7 +1322,7 @@
          (filter not-empty)
          distinct)))
 
-;;; POD This might be used in grounding :proving, or :prvn, or it might be a waste of time!
+;;; ToDo: This might be used in grounding :proving, or :prvn, or it might be a waste of time!
 (defn set-binding-sets
   "If the argument is a proof with a non-ground :proving,
    find bindings deeper in the proof and set :binding-sets."
@@ -1319,7 +1334,7 @@
       (assoc proof :binding-sets binding-sets))
     proof))
 
-;;; POD does this need to look at cartesian product of bindings??? I think so.
+;;; ToDo: Does this need to look at cartesian product of bindings??? I think so.
 ;;; (expand-proof-bindings expand-test)
 (defn add-proof-binding-sets
   "Walk through the proof adding a :binding-sets property"
@@ -1384,11 +1399,11 @@
     (assoc  ?game-kb :wdimacs (wdimacs-string ?game-kb))
     (if pretty-analysis?
       (as-> ?game-kb ?g2
-        (update ?g2 :pclauses (fn [pcs] (mapv (fn [pc] ; POD This sorting for pretty wdimacs?
+        (update ?g2 :pclauses (fn [pcs] (mapv (fn [pc] ; This sorting for pretty wdimacs?
                                                 (update pc :cnf
                                                         (fn [cnf] (vec (sort-by #(-> % :pred :pos) cnf))))) pcs)))
         (update ?g2 :pclauses sort-clauses)
-        (assoc  ?g2 :wdimacsc (wdimacs-string ?g2 :commented? true)))
+        (assoc  ?g2 :wdimacsc (wdimacs-string ?g2 :commented? true))) ; Comments for this line.
       ?game-kb)))
 
 (def ngames-played (atom 0))
@@ -1429,7 +1444,7 @@
       (if (empty? groups)
         result
         (let [game (first groups) ; A 'game' is a collection proof-ids.
-              kb (info-for-game kb game)] ; POD was (merge kb (info-for-game kb game))
+              kb (info-for-game kb game)]
           ;(log/info "Running game" game)
           (recur (rest groups)
                  (let [res (:mpe (run-one kb game :pretty-analysis? false))
@@ -1456,7 +1471,7 @@
               (recur
                (-> res
                    (assoc :winners winners)
-                   ;; POD not exactly the right place to pick up losers, but okay, I think.
+                   ;; ToDo: Not exactly the right place to pick up losers, but okay, I think.
                    (update :losers (fn [loo]
                                      (into loo
                                            (if (> (count losers) 2)
@@ -1523,7 +1538,6 @@
       (assoc  ?kb :datatab         (datatab ?kb))
       (assoc  ?kb :raw-proofs      (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}}))
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
-      (reset! diag ?kb)
       (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
@@ -1603,7 +1617,6 @@
   (cl-format *out* "~{~%~A~}" (:observations kb))
   true)
 
-;;; POD, this is a good candidate for sending to the SPA log!
 (defn report-results
   "Print commented WDIMACS, prop-ids and best scores for diagnostics."
   [kb & {:keys [stream] :or {stream *out*}}]

@@ -15,6 +15,15 @@
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
+;;; ToDo: All of these need definition
+(def default-elimination-threshold              400)
+(def default-black-listed-preds                 #{})
+(def default-black-list-probability             0.001)
+(def default-pred-names-rule-probability        0.001)
+(def default-assumption-probability             0.100)
+;;; This next one is temporary until I translates such clauses to hard clauses.
+(def default-max-clause-probability "Any clause probability larger than this value gets this value and a warning." 0.999999)
+
 (defn cvar?      [x] (-> x meta :cvar?))
 
 (def diag2 (atom {}))
@@ -118,18 +127,32 @@
   (into (vector (form2lit (:head rule)))
         (mapv #(-> % form2lit comp-lit) (:tail rule))))
 
-;;; This if not negating pclause in MAX-SAT.
-(defn neg-log-cost
-  "Cost is 100 * -log(1- P) rounded, where P in [0, 0.99]."
+;;; (Math/round (- (* 100.0 ##-Inf))) => 9223372036854775807. Really!!!
+(defn rc2-cost-fn
+  "Cost = 100 * -log(1 - P) rounded.
+   This is the clause cost function for solvers like RC2 that minimize cost (not maximize score).
+   The total cost of an individual is the sum of the costs of each clause it violates.
+   A disjunctive clause is violated if ALL of its literals are violated by the individual.
+   The cost of violating a clause is high if the clause is probable.
+   Callers of this function should warn if the argument is larger than default-max-clause-probability,
+   which is likely in [0.99999 1.0)."
   [prob]
-  (let [prob (min prob 0.99)]
-    (Math/round (- (* 100.0 (Math/log (- 1.0 prob)))))))
+  (Math/round (- (* 100.0 (Math/log prob)))))
 
 ;;; This if not negating pclause in MAX-SAT.
-(defn neg-log-cost-1
-  "inverse of neg-log-cost"
+(defn rc2-cost-fn-inv
+  "Inverse of neg-log-cost-fn"
   [cost]
-  (- 1.0 (Math/exp (/ (- cost) 100.0))))
+  (Math/exp (/ (- cost) 100.0)))
+
+(defn neg-log-cost-fn
+  [prob]
+  (Math/round (- (* 100.0 (Math/log prob))))) ; ToDo: More significant digits.
+
+(defn neg-log-cost-fn-inv
+  "Inverse of neg-log-cost-fn"
+  [cost]
+  (Math/exp (/ (- cost) 100.0)))
 
 (defn skol-var
   "'Skolemize' the argument variable."
@@ -220,16 +243,45 @@
     (update ?kb :rules finalize-rules)
     (update ?kb :facts finalize-facts)))
 
-
-;;; ToDo: All of these need definition
-(def default-elimination-threshold              400)
-(def default-black-listed-preds                 #{})
-(def default-black-list-probability             0.001)
-(def default-pred-names-rule-probability        0.001)
-(def default-assumption-probability             0.100)
 (def valid-kb-keys "Keys allowed in a defkb declaration."
   #{:rules :facts :observations :eliminate-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
     :black-listed-preds :black-list-prob :pred-names-rule-prob :default-assume-prob})
+
+#_(defn factual-not-pred
+  "A negated predicate in the RHS of a rule is processed as a new predicate.
+   If the argument is (pred ?a ?b) returned is (fnot-pred ?a ?b)."
+  [arg]
+  (let [[pred-sym & args] (second arg)]
+    `(~(->> pred-sym name (str "fnot-") symbol) ~@args)))
+
+(defn rewrite-factual-nots
+  "A NOT can be used in the RHS of a rule (See park-kb testcase.)
+   (not (pred ?x ?y)) is rewritten as (fnot-pred ?x ?y) with metadata {:factual-not? true}"
+  [rule]
+  (update rule :tail
+          (fn [tail] (mapv #(if (= 'not (first %))
+                              (with-meta
+                                (let [[pred-sym & args] (second %)]
+                                  `(~(->> pred-sym name (str "fnot-") symbol) ~@args))
+                                {:factual-not? true
+                                 :parent-fact (second %)})
+                              %)
+                           tail))))
+
+;;; ToDo: This assumes there is a :parent-fact. More work needed if an assumption or observation is being used.
+(defn update-facts-for-factual-nots
+  "Rule tails can use (not <some predicate>). These are treated as facts in themselves
+   In the current implementation there must be a parent fact must exist."
+  [facts rules]
+  (let [fact-atm (atom (set facts))]
+    (doseq [rule rules]
+      (doseq [rhs-elem (:tail rule)]
+        (when-let [parent (-> rhs-elem meta :parent-fact)]
+          (if-let [fmap (some #(when (uni/unify parent (:fact %)) %) facts)]
+            (swap! fact-atm conj {:prob (- 1.0 (:prob fmap)) :fact rhs-elem})
+            (log/warn "Factual not (not in RHS of a rule) without corresponding fact:" rhs-elem)))))
+    ;; ToDo: Would be nice were they to keep the order in they originally had.
+    (-> fact-atm deref vec)))
 
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
@@ -242,8 +294,8 @@
                 observations               []
                 eliminate-assumptions      []
                 elimination-priority       []
-                cost-fn                    neg-log-cost
-                inv-cost-fn                neg-log-cost-1
+                cost-fn                    rc2-cost-fn #_neg-log-cost-fn
+                inv-cost-fn                rc2-cost-fn-inv #_neg-log-cost-fn-inv
                 elimination-threshold      default-elimination-threshold
                 black-listed-preds         default-black-listed-preds
                 black-list-prob            default-black-list-probability
@@ -252,23 +304,24 @@
   (let [invalid-keys (clojure.set/difference (-> args keys set) valid-kb-keys)]
     (if (not-empty invalid-keys)
       (throw (ex-info (str "Invalid keys in defkb: " invalid-keys) {:invalid invalid-keys}))
-      `(def ~name (identity  {:doc-string ~doc-string
-                              :vars {:assumption-count (atom 0)
-                                     :pclause-count (atom 0)
-                                     :num-skolems (atom 0)
-                                     :cost-fn ~cost-fn,
-                                     :inv-cost-fn ~inv-cost-fn}
-                              :params {:black-listed-preds         ~black-listed-preds
-                                       :black-list-prob            ~black-list-prob
-                                       :pred-names-rule-prob       ~pred-names-rule-prob
-                                       :default-assume-prob        ~default-assume-prob}
-                              :rules '~rules
-                              :facts '~facts
-                              :assumptions-used (atom {})
-                              :observations '~observations
-                              :eliminate-assumptions '~eliminate-assumptions
-                              :elimination-threshold ~elimination-threshold
-                              :elimination-priority '~elimination-priority})))))
+      `(let [rules# '~(mapv rewrite-factual-nots rules)]
+         (def ~name (identity  {:doc-string ~doc-string
+                                :vars {:assumption-count (atom 0)
+                                       #_#_:pclause-count (atom 0)
+                                       :num-skolems (atom 0)
+                                       :cost-fn ~cost-fn,
+                                       :inv-cost-fn ~inv-cost-fn}
+                                :params {:black-listed-preds         ~black-listed-preds
+                                         :black-list-prob            ~black-list-prob
+                                         :pred-names-rule-prob       ~pred-names-rule-prob
+                                         :default-assume-prob        ~default-assume-prob}
+                                :rules rules#
+                                :facts (update-facts-for-factual-nots '~facts rules#)
+                                :assumptions-used (atom {})
+                                :observations '~observations
+                                :eliminate-assumptions '~eliminate-assumptions
+                                :elimination-threshold ~elimination-threshold
+                                :elimination-priority '~elimination-priority}))))))
 
 (defkb _blank-kb "This KB is used to define the following default- vars.")
 (def default-params (-> #'_blank-kb var-get :params))
@@ -282,7 +335,7 @@
   (reset! diag2 {})
   (reset! (:assumptions-used kb) {})
   (reset! (-> kb :vars :assumption-count) 0)
-  (reset! (-> kb :vars :pclause-count) 0)
+  #_#_(reset! (-> kb :vars :pclause-count) 0)
   (reset! (-> kb :vars :num-skolems) 0)
   (dissoc kb :raw-proofs :cnf-proofs :pclauses))
 
@@ -306,12 +359,14 @@
           :else                             (do (log/warn "Using default assume-prob for" pred-sym)           (-> kb :params :default-assume-prob)))))
 
 (defn pclause-for-non-rule
-  "Return a pclause for non-rule proof-vec step, except when it is a negated fact, then return nil."
+  "Return a pclause for non-rule proof-vec step, except when it is a negated fact, then return nil.
+   This can be a bit confusing: negated predicates in a step are part of an explanation; they need their own pclauses.
+   Later in processing we'll need a pclause for the negation of every predicate (whether it is positive or negative literal)."
   [kb proof-id step]
   (reset! diag kb)
   (let [ground-atom (:step step)
-        negated? (= 'not (first ground-atom))
-        ground-atom (if negated? (second ground-atom) ground-atom)
+        #_#_negated? (= 'not (first ground-atom)) ; This step uses a "factual not" (RHS with NOT in it), e.g. Park test case.
+        #_#_ground-atom (if negated? (second ground-atom) ground-atom)
         facts (-> kb :facts vals)]
     (as-> {:using-proof proof-id} ?pc
       (cond (:observation? step)          (-> ?pc
@@ -320,15 +375,20 @@
                                               (assoc :remove? true)
                                               (assoc :prob 1.0)
                                               (assoc :comment (cl-format nil "OB ~A" (:step step))))
-            ;; ToDo: No negative facts.
             (:fact? step)                 (let [fact (some #(when (uni/unify  ground-atom (-> % :cnf first :pred)) %) facts)]
                                             (-> fact
                                                 (assoc :fact? true)
-                                                (assoc :cnf (vector {:pred ground-atom :neg? negated?})) ; want the ground atom
+                                                (assoc :from (:id fact))
+                                                (assoc :cnf (vector (cond-> {:pred ground-atom :neg? false}
+                                                                      #_#_negated? (assoc :pred (factual-not-pred ground-atom))
+                                                                      #_#_negated? (assoc :factual-not? true))))
                                                 (assoc :using-proof (:using-proof ?pc))
-                                                (assoc :comment (cl-format nil "~A" ground-atom))))
+                                                (assoc :comment (if false #_negated?
+                                                                  (cl-format nil "(FNOT ~A)" ground-atom)
+                                                                  (cl-format nil "~A" ground-atom)))))
             (:assumption? step)           (-> ?pc
                                               (assoc :assumption? true)
+                                              (assoc :from (:id ?pc))
                                               (assoc :prob (assumption-prob (first ground-atom) kb))
                                               (assoc :cnf (vector {:pred ground-atom :neg? false}))
                                               (assoc :comment (cl-format nil "~A" ground-atom)))))))
@@ -358,7 +418,7 @@
                          (assoc :rule? true)
                          (assoc :using-proof proof-id)
                          (assoc :bindings bindings) ; ToDo: I don't know that it is useful, but bindings have been such a problem...
-                         (assoc :from-rule rule-id)
+                         (assoc :from rule-id)
                          (update :cnf (fn [cnf] (mapv (fn [term] (update term :pred #(uni/subst % bindings))) cnf)))
                          (assoc :comment (str rule-id " "  bindings  " " (uni/subst (:head rule) bindings))))
         non-rule-steps-used (reduce (fn [res g-rhs]
@@ -402,7 +462,7 @@
   "Collect pclauses noting with the set :used-in which proofs they are used-in."
   [kb]
   (reset! diag kb)
-  (let [pclause-count (-> kb :vars :pclause-count)
+  (let [#_#_pclause-count (-> kb :vars :pclause-count)
         pclauses-by-cnf
         (as-> (-> kb :proof-vecs vals) ?p
           (mapcat #(collect-from-pvec kb %) ?p)
@@ -415,9 +475,12 @@
                                       (assoc :used-in used-in)))))
                     []
                     pclauses-by-cnf)
-         (mapv #(cond (:rule? %) (assoc % :id (-> (str "pc-" (swap! pclause-count inc) "-ru") keyword))
+         ;; These ID's will be made unique later, through reduction and inversion.
+         (mapv #(assoc % :id (:from %)))
+         #_(mapv #(cond (:rule? %) (assoc % :id (-> (str "pc-" (swap! pclause-count inc) "-ru") keyword))
                       (:fact? %) (assoc % :id (-> (str "pc-" (swap! pclause-count inc) "-fa") keyword))
                       (:assumption? %) (assoc % :id (-> (str "pc-" (swap! pclause-count inc) "-as") keyword)))))))
+
 
 (defn reduce-pclause
   "Reduce the pclause's :cnf by applying evidence (See J.D. Park, 2002):
@@ -688,6 +751,8 @@
    the 'positive' (but disjunctive) form to which the instantiation is tested.
    Also, penalty increases as probability decreases (cost = -log(Prob))."
   [kb pclause & {:keys [commented? data-only? fancy-threshold] :or {fancy-threshold 10}}]
+  (when (> (:prob pclause) default-max-clause-probability)
+    (log/warn "Consider declaring this clause a hard clause (high probability):" pclause))
   (let [cost ((-> kb :vars :cost-fn) (:prob pclause))
         pid-vec (pclause2pid-vec pclause)
         used?   (set pid-vec)
@@ -821,7 +886,8 @@
                            {:cnf cnf
                             :prob (:prob nhrule)
                             :type :rule
-                            :id (-> (str "pc-" (swap! (-> kb :vars :pclause-count) inc) "-nh"))
+                            :id (-> (:id nhrule) name (str "-nh") keyword) ; 2023
+                            #_(-> (str "pc-" (swap! (-> kb :vars :pclause-count) inc) "-nh"))
                             :comment (str "NH " (:id nhrule) " " sub)})))
                  [])
          ;; If the nhrule is about anti-symmetry only need one of the bindings.
@@ -836,9 +902,12 @@
 
 (defn add-not-head-pclauses
   "Return new pclauses for rules with NOT in the head.
-   Purposes of these rules include (1) enforcing disjointed types of individuals,
-   and (2) enforcing anti-symmetric relations. The latter cannot be done with ordinary
-   rules because inference won't stop."
+   Purposes of these rules include
+     (1) enforcing disjointed types of individuals, and
+     (2) enforcing anti-symmetric relations, for example, {:head (not (biggerSet ?x ?y)) :tail [(biggerSet ?y ?x)]}
+   This is only used in rather unusual circumstances, since here the rule does not concern causality.
+   (You can't provide an explanation for why something didn't happen simply by putting a NOT in the head.)
+   Also there may be a race condition in inference around these kinds of issues."
   [kb]
   (let [not-heads (filter #(-> % :head form2lit :neg?) (->> kb :rules vals))
         ground-facts (->> kb :pclauses unique-preds)]
@@ -1570,7 +1639,7 @@
       (cl-format stream "~%Cost ~3d: ~A~%" (:pvec sol)))
       ;; No solutions, so just show p-inv
     (cl-format stream "No solution.~2%~{~A~%~}"
-               (->> :prop-ids clojure.set/map-invert vec (sort-by first))))
+               (->> kb :prop-ids clojure.set/map-invert vec (sort-by first))))
   true)
 
 #_(defn report-solution

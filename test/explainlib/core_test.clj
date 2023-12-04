@@ -183,16 +183,17 @@ c This is a comment.  'c' in first column, then a space!
 
 ;;;==================================== Meaning of clauses  =====================================
 (defkb park-kb
-  "A KB for testing the problem from Park (2002) 'Using Weighted MAX-SAT engines to solve MPE'."
-;;;   C |  P(C)                       C    D   |  P(D|C)   (D is unlikely, C helps a little).
-;;;  ---+------                      ----------+----------
-;;;   c |  0.3                        c    d   |   0.2         c ->  d
-;;;   d |  0.7                        c   -d   |   0.8    INV  c ->  d
-;;;                                  -c    d   |   0.1        -c ->  d
-;;;                                  -c   -d   |   0.9    INV -c ->  d
+  "A KB for testing the problem from Park (2002) 'Using Weighted MAX-SAT engines to solve MPE'. (D is unlikely, C helps a little)."
+;;;   C |  P(C)                       C    D   |  P(D|C)                       Clause probabilities
+;;;  ---+------                      ----------+----------                          ------
+;;;   c |  0.3                        c    d   |   0.2         c ->  d                0.06
+;;;  -c |  0.7                        c   -d   |   0.8    INV  c ->  d                0.24
+;;;                                  -c    d   |   0.1        -c ->  d                0.07
+;;;                                  -c   -d   |   0.9    INV -c ->  d                0.63 (Since these are all possible individuals, the sum is 1.0.)
+;;;
   :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
-    :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
+  :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
 
 (deftest park-concept
   (testing "Demonstrating the concept of using a MAXSAT solver for MPE."
@@ -383,7 +384,8 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.01 :head (injective ?f)          :tail [(func1 ?f ?x ?y) (indexSet ?x) (indexSet ?y) (biggerSet ?x ?y)]}
           {:prob 0.60 :head (objectiveFnVal ?x)     :tail [(decisionVar ?x)                               (contributesToObj ?x)]}
           {:prob 0.60 :head (objectiveFnVal ?y)     :tail [(optLocalVar ?y) (decisionVar ?x) (func ?x ?y) (contributesToObj ?y)]}
-          {:prob 0.99 :head (biggerSet ?x ?y)       :tail [(not (biggerSet ?y ?x))]}] ; 2023 head was negated. ToDo: syntax to make this a hard clause.
+          ;; ToDo: Make the next a hard clauses. Note that you can't move not to the tail. This is a very special example.
+          {:prob 0.99 :head (not (biggerSet ?x ?y)) :tail [(biggerSet ?y ?x)]}]
   :observations [(optLocalVar ActualEffort)
                  (costConcept CostTable)
                  (resourceConcept Workers)
@@ -1026,8 +1028,8 @@ c This is a comment.  'c' in first column, then a space!
         (as-> kb+setup ?exp
           (update-in ?exp [:kb :assumptions-used] atom)
           (assoc-in ?exp [:kb :vars]
-                    {:cost-fn      explainlib.core/neg-log-cost
-                     :inv-cost-fn  explainlib.core/neg-log-cost-1
+                    {:cost-fn      explainlib.core/neg-log-cost-fn
+                     :inv-cost-fn  explainlib.core/neg-log-cost-fn-inv
                      :assumption-count (atom 0)
                      :pclause-count (atom 0)
                      :num-skolems (atom 0)})

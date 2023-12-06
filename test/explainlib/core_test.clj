@@ -42,6 +42,19 @@ c This is a comment.  'c' in first column, then a space!
 20       -1     2     0
 10       -1    -2     0")
 
+;;; 1 : 70        1           0
+;;; 2 : 30       -1           0
+;;; 3 : 20              2     0
+;;; 4 : 80             -2     0
+;;; 5 : 90        1    -2     0
+;;; 6 : 20       -1     2     0
+;;; 7 : 10       -1    -2     0
+
+;;; [{:model [1,  -2], :cost 70}    ; L2 + L3 + L6      = 30 + 20 + 20      = 70
+;;;  {:model [-1, -2], :cost 90}    ; L1 + L3           = 70 + 20           = 90
+;;;  {:model [1,   2], :cost 120}   ; L2 + L4 + L7      = 30 + 80 + 10      = 120
+;;;  {:model [-1,  2], :cost 240}]  ; L1 + L4 + L5      = 70 + 80 + 90      = 240
+
 (def another-maxsat
   "p wcnf 9 21 2661
 2661   1 2                                            0
@@ -65,7 +78,6 @@ c This is a comment.  'c' in first column, then a space!
 120               -3                   7        -9    0
 36                -3                  -7        -9    0
 36                          -5                  -9    0")
-
 
 ;;; 1 : 70        1           0
 ;;; 2 : 30       -1           0
@@ -184,36 +196,50 @@ c This is a comment.  'c' in first column, then a space!
 ;;;==================================== Meaning of clauses  =====================================
 (defkb park-kb
   "A KB for testing the problem from Park (2002) 'Using Weighted MAX-SAT engines to solve MPE'. (D is unlikely, C helps a little)."
-;;;   C |  P(C)                       C    D   |  P(D|C)                       Clause probabilities
+  :global-disjoint? true
+  :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
+          {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
+  :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
+
+;;;   C |  P(C)                       C    D   |  P(D|C)                       Probabilities of the individuals
 ;;;  ---+------                      ----------+----------                          ------
 ;;;   c |  0.3                        c    d   |   0.2         c ->  d                0.06
 ;;;  -c |  0.7                        c   -d   |   0.8    INV  c ->  d                0.24
 ;;;                                  -c    d   |   0.1        -c ->  d                0.07
 ;;;                                  -c   -d   |   0.9    INV -c ->  d                0.63 (Since these are all possible individuals, the sum is 1.0.)
-;;;
-  :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
-          {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
-  :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
+;;; Note that the things you get back from explain are the costs of clauses you violated; lowest cost is the most likely explanation but to
+;;; get a probability back you'd have to plug the answer back into the Bayes net. (Not implemented owing to need to study "model counting" more.)
 
 (deftest park-concept
   (testing "Demonstrating the concept of using a MAXSAT solver for MPE."
-    (testing "The encoding to WDIMACS (whatever that is) using report-problem, which isn't legal WDIMACS."
+    (testing "The presentation of WDIMACS using report-problem as shown has end comments, which isn't legal syntax."
       (is (= (->> ["p wcnf 4 14 737"
-                   "737                  3    4    0"
-                   "737                 -3   -4    0"
-                   "737        1              4    0"
-                   "737             2    3         0"
-                   "737       -1         3         0"
-                   "737            -2         4    0"
+                   "737                  3    4    0 c At least one solution."
+                   "737                 -3   -4    0 c Not both solutions."
+                   "737        1         3         0 c If not solution 3 then (fnot/cee foo)."
+                   "737             2         4    0 c If not solution 4 then (cee foo)."
+                   "737       -1              4    0 c If not solution 4 then (not (fnot/cee foo))." ; This kind of clause (these two) might be optional.
+                   "737            -2    3         0 c If not solution 3 then (not (cee foo))."      ; They force disjointedness, which can be useful for classification.
                    ""
-                   "1 : 36       1         0 c pc-2-fa (cee foo)"
-                   "2 : 120      1         0 c pc-4-fa-inv (cee foo) | INV"
-                   "3 : 36      -1         0 c pc-4-fa (cee foo)"
-                   "4 : 120     -1         0 c pc-2-fa-inv (cee foo) | INV"
-                   "5 : 11       1         0 c pc-3-ru :rule-2 {?x-r2 foo} (dee foo) | REDU (not (dee foo))"
-                   "6 : 230      1         0 c pc-3-ru-inv :rule-2 {?x-r2 foo} (dee foo) | INV | REDU (dee foo)"
-                   "7 : 161     -1         0 c pc-1-ru-inv :rule-1 {?x-r1 foo} (dee foo) | INV | REDU (dee foo)"
-                   "8 : 22      -1         0 c pc-1-ru :rule-1 {?x-r1 foo} (dee foo) | REDU (not (dee foo))"]
+                   "1 : 120      1         0 c fact-1 (fnot/cee foo)"
+                   "2 : 36      -1         0 c fact-1-inv (fnot/cee foo) | INV"
+                   "3 : 36            2    0 c fact-2 (cee foo)"
+                   "4 : 120          -2    0 c fact-2-inv (cee foo) | INV"
+                   "5 : 230     -1         0 c rule-2-inv :rule-2 {?x-r2 foo} (dee foo) | INV | REDU (dee foo)"
+                   "6 : 11      -1         0 c rule-2 :rule-2 {?x-r2 foo} (dee foo) | REDU (not (dee foo))"
+                   "7 : 161          -2    0 c rule-1-inv :rule-1 {?x-r1 foo} (dee foo) | INV | REDU (dee foo)"
+                   "8 : 22           -2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo) | REDU (not (dee foo))"
+                   ""
+                   "  1: cost:   313 model: [1, -2, -3, 4]  proof: :proof-2  :pvec [(fnot/cee foo)]"
+                   "  2: cost:   423 model: [-1, 2, 3, -4]  proof: :proof-1  :pvec [(cee foo)]"
+                   ""
+                   "[(fnot/cee foo) 1]"
+                   "[(cee foo) 2]"
+                   ""
+                   "0.200 :rule-1   :: (dee ?x-r1) :- (cee ?x-r1) "
+                   "0.100 :rule-2   :: (dee ?x-r2) :- (fnot/cee ?x-r2) "
+                   "0.700 :fact-1   :: (fnot/cee ?x-f1)"
+                   "0.300 :fact-2   :: (cee ?x-f2)"]
                   (interpose "\n")
                   (apply str))
              (let [log-vec (atom [])]
@@ -300,6 +326,7 @@ c This is a comment.  'c' in first column, then a space!
 
 (defkb road-is-slow-kb
   "The blocked road KB. From a ProbLog example, I think."
+  :global-disjoint? true
   :rules  [{:prob 0.8 ; Thus it is the more reliable rule.
             :head (road-is-slow ?loc)
             :tail [(heavy-snow ?loc) (bad-road-for-snow ?loc)]}
@@ -425,8 +452,7 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
           {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
 
-
-;;;------ Tests for the above KBs
+;;;------ Tests for the above KBs ----------------------------
 (deftest good-explanations
   (testing "That MPE is getting good results."
     (testing "Example from Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"

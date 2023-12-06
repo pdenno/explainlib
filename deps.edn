@@ -17,7 +17,7 @@
                    :main-opts      ["-m" "kaocha.runner"]
                    :extra-deps     {lambdaisland/kaocha          {:mvn/version "1.87.1366"}
                                     ;; Since I'm running from the command line, bin/koacha, need to repeat these.
-                                    com.lambdaisland/classpath      {:mvn/version "0.4.44"}
+                                    com.lambdaisland/classpath   {:mvn/version "0.4.44"}
                                     org.clojure/tools.namespace  {:mvn/version "1.4.4"}}}
 
             :build    {:deps {io.github.clojure/tools.build {:mvn/version "0.9.6"}}

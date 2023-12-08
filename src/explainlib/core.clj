@@ -17,7 +17,7 @@
 (require-python '[pysat.formula :as wcnf])
 
 ;;; ToDo: All of these need definition
-(def default-elimination-threshold              400)
+(def default-elimination-threshold "Remove certain proofs when there are more than this number. See fn winnow-by-priority" 400)
 (def default-black-listed-preds                 #{})
 (def default-black-list-probability             0.001)
 (def default-pred-names-rule-probability        0.001)
@@ -31,7 +31,7 @@
 (def diag  (atom {}))
 
 ;;; facts            = Predicates with associated probability.
-;;; observations     = Predicates without associated probability. These are used to simply proofs. See use of :remove? in several places.
+;;; observations     = Predicates without associated probability. These are used to simply pclauses. See use of :remove? in several places.
 ;;; assumptions      = Predicates with associated probability that will be generated to complete the RHS of a rule in the absence of suitable facts or observations.
 ;;; skolem           = A predicate role that is generated where the a does not otherwise have a binding; it has existential quantification.
 ;;; ground fact      = A fact that has no unbound roles, skolems allowed.
@@ -39,6 +39,14 @@
 ;;; non-empty clause = A clause containint at least one literal
 ;;; horn clause      = A non-empty disjunctive clause with at most one positive literal.
 ;;; definite clause  = A non-empty disjunctive clause with exactly one positive literal.
+;;; pclause          = A disjunctive clause resulting from the use of a fact, assumption, or rule in a proof or its inverse.
+;;;                    The pclause represents the intent of the clause and is used directly to define a weighted MAX-SAT constraint, it is not inverted for this purpose.
+;;;                    A pclause has CNF, probability and (for debugging) provenance information.
+;;;                    The probability of the inverse is 1 - P, where P is the probability of the original clause.
+;;; query-form       = A positive literal which is the subject of a probabilistic 'explanation'.
+;;; raw proof        = A (typically deeply) nested structure describing use of facts, assumptions and inference to 'explain' the query form.
+;;; proof-vec        = A flattened version of a raw proof. It contains :steps and :pvec-lits.
+;;; game             = A collection of proofs used in a MAX-SAT analysis. When a query results in many proofs, subsets of all games compete in a tournament.
 
 ;;; ToDo: kb should disallow cycles in rules.
 (s/def ::neg?    boolean?)
@@ -94,12 +102,12 @@
   (and (seq? form)
        (empty? (collect-vars form))))
 
-(defn comp-lit
+(defn complement-lit
   "Complement the argument literal."
   [lit]
   (update lit :neg? not))
 
-(defn comp-lits?
+(defn complement-lits?
   "Return true if the two literals are complements."
   [lit1 lit2]
   (and (uni/unify (:pred lit1) (:pred lit2))
@@ -125,7 +133,7 @@
   "Return the CNF corresponding to the rule, a vector of literal MAPS."
   [rule]
   (into (vector (form2lit (:head rule)))
-        (mapv #(-> % form2lit comp-lit) (:tail rule))))
+        (mapv #(-> % form2lit complement-lit) (:tail rule))))
 
 ;;; (Math/round (- (* 100.0 ##-Inf))) => 9223372036854775807. Really!!!
 (defn rc2-cost-fn
@@ -244,7 +252,7 @@
     (update ?kb :facts finalize-facts)))
 
 (def valid-kb-keys "Keys allowed in a defkb declaration."
-  #{:rules :facts :observations :eliminate-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
+  #{:rules :facts :observations :eliminate-by-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
     :black-listed-preds :black-list-prob :pred-names-rule-prob :default-assume-prob :global-disjoint?})
 
 (defn rewrite-rule-factual-nots
@@ -280,12 +288,12 @@
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
    will be generated afterwards. Its facts are observations. Each observation is a ground
    literal that will be processed through BALP to generate all proof trees."
-  [name doc-string & {:keys [rules facts observations eliminate-assumptions elimination-priority elimination-threshold cost-fn inv-cost-fn
+  [name doc-string & {:keys [rules facts observations eliminate-by-assumptions elimination-priority elimination-threshold cost-fn inv-cost-fn
                              black-listed-preds black-list-prob pred-names-rule-prob default-assume-prob global-disjoint?]
            :or {rules                      []
                 facts                      []
                 observations               []
-                eliminate-assumptions      []
+                eliminate-by-assumptions   []
                 elimination-priority       []
                 global-disjoint?           false ; Say this explicitly for default-params map.
                 cost-fn                    rc2-cost-fn #_neg-log-cost-fn
@@ -315,7 +323,7 @@
                                 :facts '~(add-facts-for-factual-nots facts rw-rules)
                                 :assumptions-used (atom {})
                                 :observations '~observations
-                                :eliminate-assumptions '~eliminate-assumptions}))))))
+                                :eliminate-by-assumptions '~eliminate-by-assumptions}))))))
 
 (defkb _blank-kb "This KB is used to define the following default- vars.")
 (def default-params (-> _blank-kb :params))
@@ -460,22 +468,28 @@
          ;; These ID's will be made unique later, through reduction and inversion.
          (mapv #(assoc % :id (:from %))))))
 
-(defn reduce-pclause
+(defn reduce-pclause-using-observations
   "Reduce the pclause's :cnf by applying evidence (See J.D. Park, 2002):
       (1) Set :remove? true if :cnf is true based on an observation.
-      (2) Remove false from :cnf based evidence."
+      (2) Remove false from :cnf based evidence.
+   The heads of inverse rules (which are negated literals) should not be removed.
+   Observation-lits includes the query."
   [pclause observation-lits]
   (let [used-ev (atom [])]
     (as-> pclause ?pc
       (update ?pc :cnf (fn [cnf]
                          (reduce (fn [c lit]
-                                   (if-let [e (some #(when (comp-lits? lit %) %) observation-lits)]
+                                   (if-let [e (and
+                                               (not (and (:inverse-rule? ?pc) (= lit (first cnf))))
+                                               (some #(when (complement-lits? lit %) %) observation-lits))]
                                      (do (swap! used-ev conj e)
                                          c)
                                      (conj c lit)))
                                  []
                                  cnf)))
-      (update ?pc :comment #(cl-format nil "~A~{ | REDU ~A~}" % (map lit2form @used-ev)))
+      (if (not-empty @used-ev)
+        (update ?pc :comment #(cl-format nil "~A~{ | REDU ~A~}" % (map lit2form @used-ev)))
+        ?pc)
       (assoc  ?pc :remove? (-> ?pc :cnf empty?))
       (s/assert ::pclause ?pc))))
 
@@ -484,16 +498,16 @@
 ;;;      (But does RC2 maxsat allow that? Should I add up the cost of these?)
 ;;;  (2) It actually removes rather than sets :remove? true.
 ;;;  HOWEVER: I have seen it remove actual duplicates.
-(defn reduce-pclauses-using-observations
+(defn reduce-pclauses
   "Return a vector of maps {:prob <probability> :cnf <clause> corresponding
    to the clauses used in the proofs and their complements reduced by the evidence."
   [kb]
   (let [observations (conj (conj (:observations kb)
                                  (:query kb))
-                           (list 'not (:query kb)))]
+                           (list 'not (:query kb)))] ; <==== 2023 Not sure about that one!
     (->> (:pclauses kb)
          (remove :remove?)
-         (mapv #(reduce-pclause % (map form2lit observations)))
+         (mapv #(reduce-pclause-using-observations % (map form2lit observations)))
          (remove :remove?)
          (mapv #(dissoc % :remove?)))))
 
@@ -559,14 +573,27 @@
                                          :pclause pclause :prop-ids prop-ids})))))
                   cnf))))
 
-(defn get-prop-ids
-  "Return map of proposition IDs to be used in MAXSAT."
-  [proof-vecs]
-  (let [lits (->> proof-vecs
-                  vals
-                  (map :pvec)
-                  (reduce into #{})
-                  (sort compare-lists))]
+;;; ToDo: In here (and therefore somewhere in the calculation of pclauses, a Skolem isn't substituted into the form.
+;;;       See, for example, road-is-slow-kb.
+(defn make-prop-ids-map
+  "Return map of proposition IDs to be used in MAXSAT.
+   Most of the predicates are from proof vecs, but some are from inverse rules,
+   which aren't part of proofs, of course, but are part of cost penalties."
+  [game-kb kb]
+  (reset! diag {:game-kb game-kb :kb kb})
+  (let [unused-lits (->> game-kb   ; rule-invs of used rules. These are for proofs/individuals that don't use the rule.
+                       :proof-vecs
+                       vals
+                       (mapcat :steps)
+                       (filter :rule?)
+                       (map :step) ; Step should be the rule head!
+                       distinct
+                       (map #(with-meta % {:rule-inv-head? true})))
+        used-lits (->> (:proof-vecs game-kb) ; used-lits are have lits already isolated in :pvec-lits.
+                       vals
+                       (map :pvec-lits)
+                       (reduce into #{}))
+        lits  (sort compare-lists (into unused-lits used-lits))]
     (zipmap lits (range 1 (-> lits count inc)))))
 
 ;;; This is useful for unifying the tail of a rule with (1) kb, or
@@ -647,20 +674,19 @@
                 (update :comment #(str % " | INV"))))]
     (map pinv (->> kb :pclauses (filter :fact?)))))
 
-;;; ToDo: This approach means no need to create the inverse rules in defkb!
 (defn inverse-rules
   "Return a vector inverses of the assumptions and facts used."
   [kb]
   (letfn [(pinv [pc]
             (-> pc
-                (update-in [:cnf 0 :neg?] not)
+                (update-in [:cnf 0 :neg?] not) ; Invert
                 (update :prob #(- 1.0 %))
                 (update :id #(-> % name (str "-inv") keyword))
+                (assoc :inverse-rule? true)
                 (update :comment #(str % " | INV"))))]
     (map pinv (->> kb
                    :pclauses
-                   (filter :rule?)
-                   (remove :no-inv?)))))
+                   (filter :rule?)))))
 
 (defn model2proof-id
   "Return the proof-id that corresponds to the model.
@@ -669,13 +695,13 @@
   (let [prop-inv    (sets/map-invert prop-ids)
         model-props (->> indv (filter pos?) (map #(get prop-inv %)) set)
         matching    (reduce-kv (fn [res proof-id pvec]
-                                 (if (= (-> pvec :pvec set) model-props)
+                                 (if (= (-> pvec :pvec-lits set) model-props)
                                    (conj res proof-id)
                                    res))
                                []
                                proof-vecs)]
     (when-not (= 1 (count matching))
-      ;(reset! diag {:indv indv :psets psets :true-props true-props :pvec proof-vecs})
+      ;(reset! diag {:indv indv :psets psets :true-props true-props :pvec-lits proof-vecs})
       (throw (ex-info "Zero or 2 or more matching solutions in proof-prop-vecs." {:matching matching :indv indv})))
     (first matching)))
 
@@ -706,7 +732,7 @@
       (mapv (fn [indv]
               (as-> indv ?i
                 (assoc ?i :proof-id (model2proof-id (remove #(z-set %) (:model indv)) prop-ids proof-vecs))
-                (assoc ?i :pvec (-> (get proof-vecs (:proof-id ?i)) :pvec vec))))
+                (assoc ?i :pvec-lits (-> (get proof-vecs (:proof-id ?i)) :pvec-lits vec))))
             results))
     (catch Throwable _ (log/error "Problem running MAXSAT."))))
 
@@ -826,7 +852,7 @@
   (let [pids      (:prop-ids kb)
         pids-1    (sets/map-invert pids)
         prop-ids  (vals pids)
-        prf-vecs  (->> kb :proof-vecs vals (map :pvec))
+        prf-vecs  (->> kb :proof-vecs vals (map :pvec-lits))
         zids      (:z-vars kb)
         z2prop    (zipmap zids prf-vecs) ; These 'define' the Zs.
         prop2z    (reduce (fn [m prop]
@@ -944,11 +970,11 @@
                      @result))))))]
      (mapcat #(if (:rule-used? %) (walk-rule % []) (vector (:prv %))) proofs)))
 
+;;; ToDo: Is this reflective of a flaw in the user's KB? Unnecessary?
 (defn winnow-regardless
-  "Remove all proofs containing predicate symbols on (:eliminate-assumptions kb) that
-   are used as assumptions."
+  "Remove all proofs containing predicate symbols on (:eliminate-by-assumptions kb) that are used as assumptions."
   [kb pvecs]
-  (if-let [elim (not-empty (-> kb :eliminate-assumptions))]
+  (if-let [elim (not-empty (-> kb :eliminate-by-assumptions))]
     (let [start-count (count pvecs)
           eliminate? (set elim)
           result (remove (fn [pvec] (some #(and (:assumption? %) (eliminate? (-> % :step first))) pvec)) pvecs)]
@@ -957,12 +983,11 @@
     pvecs))
 
 ;;;   The set is winnowed down to the
-;;;   kb's :elimination-threshold by selectively removing members that contains
-;;;   assumptions from the :elimination-order. :no-kb-tasks is for debugging.
+;;;   kb's :elimination-threshold by selectively removing members that contains  assumptions from the :elimination-order.
 (defn winnow-by-priority
   "If there are more than :elimination-threshold proofs, remove those that
-   include assumptions that involve predicate symbols in :elimination-order
-   until the theshold is met or you run out of symbols on :elimination-order."
+   include assumptions that involve predicate symbols in :elimination-priority
+   until the theshold is met or you run out of symbols on :elimination-priority."
   [kb pvecs]
   (let [threshold (-> kb :params :elimination-threshold)]
     (loop [order (-> kb :params :elimination-priority)
@@ -975,16 +1000,19 @@
                 (log/info "Removed" (- cnt (count smaller)) "proofs containing assumption" pred-sym))
               (recur (rest order) smaller)))))))
 
+;;; ToDo: I'm not convinced that this is necessary. (2023).
 (defn distinct-proof-vecs
-  "Filter out duplicates in the sense of two or more have the same :pvec.
+  "Filter out duplicates in the sense of two or more have the same :pvec-lits.
    This is possible owing to using different rules towards the same end
    (e.g. rules about symmetric arguments)."
   [pvecs]
-  (let [by-pvec (group-by :pvec (vals pvecs))]
+  (let [by-pvec (group-by :pvec-lits (vals pvecs))]
     (->> (reduce-kv (fn [res _ pv] (conj res (first pv))) [] by-pvec)
          (reduce (fn [res pv] (assoc res (:proof-id pv) pv)) {}))))
 
-(defn collect-proof-vecs
+;;; ToDo: (1) Why make pvec-lits here? Shouldn't it only be run on run-one?
+;;;       (2) Can't this whole thing be done on a per-proof basis (meaning change walk-rules and explain).
+(defn flatten-proofs
   "Collect vectors describing how each proof navigates :raw-proofs to some collection of
    grounded LHSs, facts and assumptions.
    The :steps is a depth-first navigation of the proof: each form of the rhs of the of a rule
@@ -996,13 +1024,14 @@
                  (winnow-by-priority kb ?pvecs)
                  (zipmap (map #(keyword (str "proof-" %)) (range 1 (inc (count ?pvecs)))) ?pvecs)
                  (reduce-kv (fn [res id pvec] (assoc res id {:proof-id id :steps pvec})) {} ?pvecs)
-                 ;; This one makes the 'pvec proper' used for prop-ids and MaxSAT generally.
+                 ;; This one makes the pvec-lits used for prop-ids and MaxSAT generally.
                  (reduce-kv (fn [res proof-id pvec-map]
                               (assoc res proof-id
-                                     (assoc pvec-map :pvec
-                                            (-> (remove (fn [pred] (some #(= pred %) observations))
+                                     (assoc pvec-map :pvec-lits
+                                            (-> (remove (fn [pred] (some #(= pred %) observations))  ; <=======================================================
                                                         (->> pvec-map :steps (map :step)))
-                                                distinct))))
+                                                distinct
+                                                vec))))
                             {} ?pvecs)
                  (distinct-proof-vecs ?pvecs))]
     (when (empty? result)
@@ -1439,15 +1468,17 @@
   "Produce a map of properties to merge into the kb to adjust it for a game.
    A game is a collection of proof-ids."
   [kb game & {:keys [pretty-analysis?]}]
+  (reset! diag kb)
   (as-> {} ?game-kb
     (assoc ?game-kb :game game)
     (assoc ?game-kb :vars (:vars kb))
     (assoc ?game-kb :params (:params kb))
+    (assoc ?game-kb :query (:query kb))
     (assoc ?game-kb :proof-vecs
            (reduce (fn [res pf-id] (assoc res pf-id (-> kb :proof-vecs pf-id)))
                    {}
                    game))
-    (assoc ?game-kb :prop-ids (get-prop-ids (:proof-vecs ?game-kb)))
+    (assoc ?game-kb :prop-ids (make-prop-ids-map ?game-kb kb))
     (assoc ?game-kb :pclauses
            (reduce (fn [res pf-id]
                      (into res (filter #((:used-in %) pf-id)) (:pclauses kb)))
@@ -1536,7 +1567,7 @@
                    (update :losers (fn [loo]
                                      (into loo
                                            (if (> (count losers) 2)
-                                             (subvec (filterv #(loser-fn (-> kb :proof-vecs % :pvec)) losers) 0 2)
+                                             (subvec (filterv #(loser-fn (-> kb :proof-vecs % :pvec-lits)) losers) 0 2)
                                              losers)))))
                (update kb :proof-vecs #(reduce-kv (fn [res proof-id pvec]
                                                     (if (winners proof-id)
@@ -1595,18 +1626,21 @@
   (log/info "Starting explanation of" query)
     (as->  kb ?kb
       (finalize-kb ?kb query)
+      (reset! diag ?kb)
       (clear! ?kb)
       (assoc  ?kb :datatab         (datatab ?kb))
       (assoc  ?kb :raw-proofs      (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}}))
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
-      (assoc  ?kb :proof-vecs      (collect-proof-vecs ?kb))
+      (assoc  ?kb :proof-vecs      (flatten-proofs ?kb))
+      (reset! diag ?kb)
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
       (update ?kb :pclauses       #(into % (inverse-facts ?kb)))
       (update ?kb :pclauses       #(into % (inverse-rules ?kb)))
       (update ?kb :pclauses       #(into % (add-not-head-pclauses ?kb)))
-      (assoc  ?kb :pclauses        (reduce-pclauses-using-observations ?kb))
+      (assoc  ?kb :pclauses        (reduce-pclauses ?kb))
       (update ?kb :pclauses       #(add-id-to-comments %))
+      (reset! diag ?kb)
       (run-problem ?kb :loser-fn loser-fn :max-together max-together)))
 
 ;;;======================================= Reporting ====================================
@@ -1628,8 +1662,8 @@
     (if (> num-sols solution-number)
       (do (cl-format stream "~%")
           (doseq [sol (:mpe kb)]
-            (cl-format stream "~%Sol~2d: cost:  ~4d, model: ~A,  proof: ~A,  :pvec ~A"
-                       (apply max (:model sol)) (:cost sol) (:model sol) (:proof-id sol) (:pvec sol))))
+            (cl-format stream "~%Sol~2d: cost:  ~4d, model: ~A,  proof: ~A,  :pvec-lits ~A"
+                       (apply max (:model sol)) (:cost sol) (:model sol) (:proof-id sol) (:pvec-lits sol))))
       ;; No solutions, so just show p-inv
       (cl-format stream "No solution.~2%~{~A~%~}"
                  (->> kb :prop-ids clojure.set/map-invert vec (sort-by first))))

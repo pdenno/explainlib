@@ -1,4 +1,4 @@
-{:setup
+{:setup ; 2023-12-17 There is no more :no-inv? (though I'm leaving it in the EDN). Make it work!
  {:title "Work Overload Notebook",
   :subtitle "mostly meaningful names",
   :save? true,

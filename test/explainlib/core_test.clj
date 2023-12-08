@@ -227,7 +227,7 @@ c This is a comment.  'c' in first column, then a space!
                    "4 : 120          -2    0 c fact-2-inv (cee foo) | INV"
                    "5 : 230     -1         0 c rule-2-inv :rule-2 {?x-r2 foo} (dee foo) | INV | REDU (dee foo)"
                    "6 : 11      -1         0 c rule-2 :rule-2 {?x-r2 foo} (dee foo) | REDU (not (dee foo))"
-                   "7 : 161          -2    0 c rule-1-inv :rule-1 {?x-r1 foo} (dee foo) | INV | REDU (dee foo)"
+                   "7 : 161          -2    0 c rule-1-inv :rule-1 {?x-r1 foo} (dee foo) | INV | REDU (dee foo)"  ; <======= WRONG! No REDU (dee foo).
                    "8 : 22           -2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo) | REDU (not (dee foo))"
                    ""
                    "  1: cost:   313 model: [1, -2, -3, 4]  proof: :proof-2  :pvec [(fnot/cee foo)]"

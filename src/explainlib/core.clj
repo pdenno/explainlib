@@ -13,17 +13,22 @@
    [explainlib.util               :as util]
    [taoensso.timbre              :as log]))
 
+;;; ToDo:
+;;;  1) Refactor pclause generation so that much of it can be done one proof at a time.
+;;;  2) Reconsider use of both lits and forms. (Choose one, use meta for the other???)
+
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
 ;;; ToDo: All of these need definition
-(def default-elimination-threshold "Remove certain proofs when there are more than this number. See fn winnow-by-priority" 400)
-(def default-black-listed-preds                 #{})
-(def default-black-list-probability             0.001)
-(def default-pred-names-rule-probability        0.001)
-(def default-assumption-probability             0.100)
-;;; This next one is temporary until I translates such clauses to hard clauses.
-(def default-max-clause-probability "Any clause probability larger than this value gets this value and a warning." 0.999999)
+(def default-elimination-threshold       "Remove certain proofs when there are more than this number. See fn winnow-by-priority" 400)
+(def default-black-listed-preds          "Gives a warning when used as an assumption; uses default probability."                 #{}) ; ToDo: Useful?
+(def default-black-list-probability      "Probability for black-listed assumptions"                                            0.001) ; ToDo: Useful?
+(def default-assumption-probability      "Assumptions should have their own probability. Warns when this is used."             0.100)
+(def default-requires-evidence?          "A set of predicates symbols for which there is a warning if using an assumption."      #{})
+(def default-all-individuals?            "Compute all individuals, not just those that have the query form true."              false)
+;;; ToDo: This next one is temporary until I translates such clauses to hard clauses.
+(def default-max-clause-probability      "Any clause probability larger than this value gets this value and a warning."     0.999999)
 
 (defn cvar?      [x] (-> x meta :cvar?))
 
@@ -36,17 +41,18 @@
 ;;; skolem           = A predicate role that is generated where the a does not otherwise have a binding; it has existential quantification.
 ;;; ground fact      = A fact that has no unbound roles, skolems allowed.
 ;;; literal          = A predicate or its negative (not).
+;;;                    N.B. currently in the code 'lit' often refers to a CNF-style {:pred (psym r1...rn) :neg? true}, whereas 'form' means (not (psym r1...rn)).
 ;;; non-empty clause = A clause containint at least one literal
 ;;; horn clause      = A non-empty disjunctive clause with at most one positive literal.
 ;;; definite clause  = A non-empty disjunctive clause with exactly one positive literal.
 ;;; pclause          = A disjunctive clause resulting from the use of a fact, assumption, or rule in a proof or its inverse.
-;;;                    The pclause represents the intent of the clause and is used directly to define a weighted MAX-SAT constraint, it is not inverted for this purpose.
+;;;                    The pclause represents the intent of the clause and is used directly to define a weighted MAXSAT constraint, it is not inverted for this purpose.
 ;;;                    A pclause has CNF, probability and (for debugging) provenance information.
 ;;;                    The probability of the inverse is 1 - P, where P is the probability of the original clause.
 ;;; query-form       = A positive literal which is the subject of a probabilistic 'explanation'.
 ;;; raw proof        = A (typically deeply) nested structure describing use of facts, assumptions and inference to 'explain' the query form.
-;;; proof-vec        = A flattened version of a raw proof. It contains :steps and :pvec-lits.
-;;; game             = A collection of proofs used in a MAX-SAT analysis. When a query results in many proofs, subsets of all games compete in a tournament.
+;;; proof-vec        = A flattened version of a raw proof. It contains :steps and :pvec-props.
+;;; game             = A collection of proofs used in a MAXSAT analysis. When a query results in many proofs, subsets of all games compete in a tournament.
 
 ;;; ToDo: kb should disallow cycles in rules.
 (s/def ::neg?    boolean?)
@@ -107,7 +113,7 @@
   [lit]
   (update lit :neg? not))
 
-(defn complement-lits?
+(defn opposite-lits?
   "Return true if the two literals are complements."
   [lit1 lit2]
   (and (uni/unify (:pred lit1) (:pred lit2))
@@ -147,7 +153,7 @@
   [prob]
   (Math/round (- (* 100.0 (Math/log (- 1.0 prob))))))
 
-;;; This if not negating pclause in MAX-SAT.
+;;; This if not negating pclause in MAXSAT.
 (defn rc2-cost-fn-inv
   "Inverse of neg-log-cost-fn"
   [cost]
@@ -251,10 +257,6 @@
     (update ?kb :rules finalize-rules)
     (update ?kb :facts finalize-facts)))
 
-(def valid-kb-keys "Keys allowed in a defkb declaration."
-  #{:rules :facts :observations :eliminate-by-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
-    :black-listed-preds :black-list-prob :pred-names-rule-prob :default-assume-prob :global-disjoint?})
-
 (defn rewrite-rule-factual-nots
   "A NOT can be used in the RHS of a rule (See park-kb testcase.)
    (not (pred ?x ?y)) is rewritten as (fnot-pred ?x ?y) with metadata {:factual-not? true}"
@@ -284,12 +286,16 @@
     ;; ToDo: Would be nice were they to keep the order in they originally had.
     (-> fact-atm deref vec)))
 
+(def valid-kb-keys "Keys allowed in a defkb declaration."
+  #{:rules :facts :observations :eliminate-by-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
+    :black-listed-preds :black-list-prob :default-assume-prob :global-disjoint? :requires-evidence? :all-individuals?})
+
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
    will be generated afterwards. Its facts are observations. Each observation is a ground
    literal that will be processed through BALP to generate all proof trees."
   [name doc-string & {:keys [rules facts observations eliminate-by-assumptions elimination-priority elimination-threshold cost-fn inv-cost-fn
-                             black-listed-preds black-list-prob pred-names-rule-prob default-assume-prob global-disjoint?]
+                             black-listed-preds black-list-prob default-assume-prob global-disjoint? requires-evidence? all-individuals?]
            :or {rules                      []
                 facts                      []
                 observations               []
@@ -298,10 +304,11 @@
                 global-disjoint?           false ; Say this explicitly for default-params map.
                 cost-fn                    rc2-cost-fn #_neg-log-cost-fn
                 inv-cost-fn                rc2-cost-fn-inv #_neg-log-cost-fn-inv
+                all-individuals?           default-all-individuals?
+                requires-evidence?         default-requires-evidence?
                 elimination-threshold      default-elimination-threshold
                 black-listed-preds         default-black-listed-preds
                 black-list-prob            default-black-list-probability
-                pred-names-rule-prob       default-pred-names-rule-probability
                 default-assume-prob        default-assumption-probability} :as args}]
   (let [invalid-keys (clojure.set/difference (-> args keys set) valid-kb-keys)]
     (if (not-empty invalid-keys)
@@ -312,11 +319,12 @@
                                        :num-skolems (atom 0)
                                        :cost-fn ~cost-fn,
                                        :inv-cost-fn ~inv-cost-fn}
-                                :params {:global-disjoint?           ~global-disjoint?
+                                :params {:all-individuals?           ~all-individuals?
+                                         :global-disjoint?           ~global-disjoint?
                                          :black-listed-preds         ~black-listed-preds
                                          :black-list-prob            ~black-list-prob
-                                         :pred-names-rule-prob       ~pred-names-rule-prob
                                          :default-assume-prob        ~default-assume-prob
+                                         :requires-evidence?         ~requires-evidence?
                                          :elimination-threshold      ~elimination-threshold
                                          :elimination-priority       '~elimination-priority}
                                 :rules '~rw-rules
@@ -340,12 +348,6 @@
   (reset! (-> kb :vars :num-skolems) 0)
   (dissoc kb :raw-proofs :cnf-proofs :pclauses))
 
-(defn pred-names-a-rule?
-  "Pred syms that name rules are not intended to be assumptions."
-  [pred-sym kb]
-  (let [head-syms (->> kb :rules vals (map :head) (map first) distinct)]
-    (some #(= pred-sym %) head-syms)))
-
 ;;; ToDo: not-yet-implemented? and requires-evidence? aren't even defaults in defkb. Not that useful; used in just one core_test.
 (defn assumption-prob
   "Return an assumption probability for the argument."
@@ -356,7 +358,6 @@
     (cond not-yet-implemented?              (do (log/warn "using not-yet-implemented? for pred-sym" pred-sym) (-> kb :params :black-list-prob))
           black-listed-pred?                (do (log/warn "using black-list-pred? for pred-sym" pred-sym)     (-> kb :params :black-list-prob))
           requires-evidence?                (do (log/warn "using requires-evidence? for pre-dsym" pred-sym)   0.01)
-          (pred-names-a-rule? pred-sym kb)  (-> kb :params :pred-names-rule-prob)
           :else                             (do (log/warn "Using default assume-prob for" pred-sym)           (-> kb :params :default-assume-prob)))))
 
 (defn pclause-for-non-rule
@@ -481,7 +482,7 @@
                          (reduce (fn [c lit]
                                    (if-let [e (and
                                                (not (and (:inverse-rule? ?pc) (= lit (first cnf))))
-                                               (some #(when (complement-lits? lit %) %) observation-lits))]
+                                               (some #(when (opposite-lits? lit %) %) observation-lits))]
                                      (do (swap! used-ev conj e)
                                          c)
                                      (conj c lit)))
@@ -502,9 +503,7 @@
   "Return a vector of maps {:prob <probability> :cnf <clause> corresponding
    to the clauses used in the proofs and their complements reduced by the evidence."
   [kb]
-  (let [observations (conj (conj (:observations kb)
-                                 (:query kb))
-                           (list 'not (:query kb)))] ; <==== 2023 Not sure about that one!
+  (let [observations (:observations kb)]
     (->> (:pclauses kb)
          (remove :remove?)
          (mapv #(reduce-pclause-using-observations % (map form2lit observations)))
@@ -589,9 +588,9 @@
                        (map :step) ; Step should be the rule head!
                        distinct
                        (map #(with-meta % {:rule-inv-head? true})))
-        used-lits (->> (:proof-vecs game-kb) ; used-lits are have lits already isolated in :pvec-lits.
+        used-lits (->> (:proof-vecs game-kb) ; used-lits are have lits already isolated in :pvec-props.
                        vals
-                       (map :pvec-lits)
+                       (map :pvec-props)
                        (reduce into #{}))
         lits  (sort compare-lists (into unused-lits used-lits))]
     (zipmap lits (range 1 (-> lits count inc)))))
@@ -688,22 +687,31 @@
                    :pclauses
                    (filter :rule?)))))
 
+;;; ToDo: This version is supposed to work for :global-disjoint? = true. Currently it doesn't!
+;;;       Something else (namely filtering like the hard-clause solution definition)is needed to collect individuals conforming to each proof.
+;;;       In that case, also, the probabilities should be calculated and summed, creating probabilities of the explanation.
 (defn model2proof-id
-  "Return the proof-id that corresponds to the model.
-  (A model the set of prop-ids (integers) indicating the truth (pos? i) of each proposition."
-  [indv prop-ids proof-vecs]
+  "Return the proof-ids that are consistent with the individual.
+   Specifically, it has to agree on all literals specified by the proof.
+   (A model the set of prop-ids (integers) indicating the truth (pos? i) of each proposition.
+    - indv: a vector of integers +/- for all the predicates in the world.
+    - prop-ids: a map relating proposition to their ID, where the integers are the world predicates.
+    - proof-vecs: all the proofs found; its :pvec-props are what are beind compared.
+    - query: The query that was proved."
+  [indv prop-ids proof-vecs query]
   (let [prop-inv    (sets/map-invert prop-ids)
-        model-props (->> indv (filter pos?) (map #(get prop-inv %)) set)
-        matching    (reduce-kv (fn [res proof-id pvec]
-                                 (if (= (-> pvec :pvec-lits set) model-props)
-                                   (conj res proof-id)
-                                   res))
-                               []
-                               proof-vecs)]
-    (when-not (= 1 (count matching))
-      ;(reset! diag {:indv indv :psets psets :true-props true-props :pvec-lits proof-vecs})
-      (throw (ex-info "Zero or 2 or more matching solutions in proof-prop-vecs." {:matching matching :indv indv})))
-    (first matching)))
+        indv-props (->> indv (filter pos?) (map #(get prop-inv %)) set)
+        matching   (reduce-kv (fn [res proof-id pvec]
+                                (let [proof-props (-> pvec :pvec-props (conj query) set)
+                                      diff (sets/difference proof-props indv-props)]
+                                  (if (empty? diff) (conj res proof-id) res)))
+                              []
+                              proof-vecs)]
+    ;; ToDo: Only warn if :global-disjoint? is true. (And that might not be around much longer!)
+    #_(when-not (= 1 (count matching))
+        (reset! diag {:indv indv :model-props model-props :matching matching})
+      (log/warn "Zero or 2 or more matching solutions in proof-prop-vecs." {:matching matching :indv indv}))
+    (-> matching sort vec)))
 
 ;;; =================== For performing Python-based RC2 weighted partial MAXSAT analysis
 ;;; ToDo: change "request" to say "cmd" and the error you get will require (user/restart).
@@ -725,16 +733,18 @@
 
 (defn python-maxsat
   "Query any active app-gateway to run an RC2 MAXSAT problem. Return the :result."
-  [{:keys [wdimacs z-vars prop-ids proof-vecs]}]
+  [{:keys [wdimacs z-vars prop-ids proof-vecs query]}]
   (try
     (let [results (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40)
           z-set (set (into z-vars (map - z-vars)))]
       (mapv (fn [indv]
               (as-> indv ?i
-                (assoc ?i :proof-id (model2proof-id (remove #(z-set %) (:model indv)) prop-ids proof-vecs))
-                (assoc ?i :pvec-lits (-> (get proof-vecs (:proof-id ?i)) :pvec-lits vec))))
+                (assoc ?i :proof-id (model2proof-id (remove #(z-set %) (:model indv)) prop-ids proof-vecs query))
+                (assoc ?i :pvec-props (-> (get proof-vecs (:proof-id ?i)) :pvec-props vec))))
             results))
-    (catch Throwable _ (log/error "Problem running MAXSAT."))))
+    (catch Throwable e
+      (reset! diag e)
+      (log/error "Problem running MAXSAT:" (:cause e) "data = " (:data e)))))
 
 (defn pclause2pid-vec
   "Return a vector of the proposition ids for the given pclause."
@@ -797,15 +807,16 @@
   "Add some text to the end for the clause for use with reporting (for debugging)."
   [base-str clause-type clause kb]
   (let [base-str (clojure.string/trim-newline base-str)
-        solution-name (apply max clause)
-        min-elem      (apply min clause)
+        solution-name (apply max (map abs clause))
+        min-elem      (apply min (map abs clause))
         index2pred (-> kb :prop-ids sets/map-invert)] ; This for type-3 and -4; there are just two elements.
     (case clause-type
-      :type-1 (str base-str " c Require at least one solution.\n")
-      :type-2 (str base-str " c Optional, only one solution.\n")
-      :type-3 (str base-str (cl-format nil " c Sol ~A requires ~A to be ~A.~%" ; ToDo: (report!?!) format didn't work here!
+      :type-0 (cl-format nil "~A c Must answer the query ~A.~%" base-str (:query kb))
+      :type-1 (str base-str " c Require at least one of these solutions (defined by the other hard clauses).\n")
+      :type-2 (str base-str (cl-format nil " c Sol ~A implies ~A to be ~A.~%" ; ToDo: (report!?!) format didn't work here!
                                        solution-name (-> min-elem abs index2pred) (if (pos? min-elem) "true" "false")))
-      :type-4 (str base-str (cl-format nil " c ~A implies Sol ~A. (optional disjoint condition)~%"
+      :type-3 (str base-str " c Optional, (needs thought!).\n")
+      :type-4 (str base-str (cl-format nil " c ~A implies Sol ~A. (optional :global-disjoint?.)~%"
                                        (-> min-elem abs index2pred)  solution-name)))))
 
 (defn hard-clause-wdimacs-string
@@ -840,21 +851,23 @@
   "Create the wdimacs string for hard clauses using a Tseitin-like transformation
    to avoid an exponential number of clauses.
    Specificaly, there are 2*num-props + (num-solutions)(num-solutions-1)/2 + 1 clauses
-   divided among four types. The types are as follows:
-     (1) 1 clause with all the Z variables, requiring at least one of the solutions.
-     (2) (num-solutions)(num-solutions-1)/2 (combinations of 2) clauses with with pairs of Z variables,
-         requiring no more than one solution to be true.
-     (3) num-props clauses that require either the proposition to be false or some solution not containing
-         the proposition to be true. (Encoded as an IF statement. Thus PROP OR any Z not containing prop.)
-     (4) roughly num-props clauses that require that if the proposition is true, then so is every solutions using it.
-         ('IF prop then Z' written as -prop V Z) "
+   divided among several types as follows:
+     - type-0: optionally, where :all-individuals? is false (the default) the query must be true
+     - type-1: mandatory, 1 clause with all the Z variables, requiring at least one of the solutions.
+     - type-2: mandatory, implications for rules that have as their head the query; this DEFINES the z-vars.
+               z-var => <a top-level rule RHS pred>, written as NOT z-var OR <the top-level rule RHS pred>
+               for every pred in every rule that is top level (has the query var as its head).
+     - type-3: optionally, (num-solutions)(num-solutions-1)/2 (combinations of 2) clauses with with pairs of Z variables,
+               requiring no more than one solution to be true.
+     - type-4: optionally, roughly num-props clauses that require that if the proposition is true, then so is every solutions using it.
+               ('IF prop then Z' written as -prop V Z) " ; ToDo: This is :globally-disjoint?, and I think it should be eliminated!
   [kb commented?]
-  (let [pids      (:prop-ids kb)
-        pids-1    (sets/map-invert pids)
+  (let [pids      (:prop-ids kb) ; A map indexed by the predicate, with integer values.
+        pids-inv  (sets/map-invert pids)
         prop-ids  (vals pids)
-        prf-vecs  (->> kb :proof-vecs vals (map :pvec-lits))
+        prf-vecs  (->> kb :proof-vecs vals (map :pvec-props))
         zids      (:z-vars kb)
-        z2prop    (zipmap zids prf-vecs) ; These 'define' the Zs.
+        z2prop    (zipmap zids prf-vecs) ; These 'define' the Zs: index is a z-var; value is the rule RHS (vector of preds) that solved it.
         prop2z    (reduce (fn [m prop]
                             (let [res (reduce-kv (fn [res z v] (if (some #(= % prop) v) (conj res z) res)) [] z2prop)]
                               (if (not-empty res)
@@ -862,17 +875,22 @@
                                 m)))
                           {}
                           (reduce into [] prf-vecs))
+        query-int (-> pids (get (:query kb)))
+        type-0    (if (-> kb :params :all-individuals?) [] (-> query-int vector vector))
         type-1    (vector zids)
-        type-2    (mapv   (fn [[x y]] (vector (- x) (- y))) (combo/combinations zids 2))
-        type-3    (->> (mapv (fn [prop-id] (conj (z-not-using (pids-1 prop-id) prop2z) prop-id))  prop-ids)
-                       (mapv (fn [vec] (sort vec)))
-                       (sort-by first))
+        type-2    (cond->> (reduce-kv (fn [res z-var preds] (into res (mapv #(conj [(- z-var)] (get pids %)) preds))) [] z2prop) ; ToDo: Implement all-individuals.
+                    ;(-> kb :params :all-individuals? not) (remove (fn [v] (some #(== query-int %) v))) ; :all-individuals?=false => individual  must answer the query.
+                    true                                  (mapv (fn [vec] (sort vec))) ; pprint order the predicates in the clause.
+                    true                                  (sort-by #(apply max (map abs %))))    ; pprint order the clause by rule they address.
+        type-3    [] ;(mapv   (fn [[x y]] (vector (- x) (- y))) (combo/combinations zids 2)) ; ToDo: Needs thought!
         type-4    (if (-> kb :params :global-disjoint?)
-                    (->> (map (fn [prop-id] (conj (z-using (pids-1 prop-id) prop2z) (- prop-id))) prop-ids)
+                    (->> (map (fn [prop-id] (conj (z-using (pids-inv prop-id) prop2z) (- prop-id))) prop-ids)
+                         (filter #(> (count %) 1)) ; Not using anything. 2023, might be a mistake.
                          (mapv (fn [vec] (sort-by #(Math/abs %) vec)))
                          (sort-by #(-> % first Math/abs)))
                     {})]
-    (hard-clause-wdimacs-string kb {:type-1 type-1 :type-2 type-2 :type-3 type-3 :type-4 type-4}
+    (reset! diag {:type-4 type-4})
+    (hard-clause-wdimacs-string kb {:type-0 type-0 :type-1 type-1 :type-2 type-2 :type-3 type-3 :type-4 type-4}
                                 {:commented? commented?})))
 
 (defn wdimacs-string
@@ -1002,16 +1020,16 @@
 
 ;;; ToDo: I'm not convinced that this is necessary. (2023).
 (defn distinct-proof-vecs
-  "Filter out duplicates in the sense of two or more have the same :pvec-lits.
+  "Filter out duplicates in the sense of two or more have the same :pvec-props.
    This is possible owing to using different rules towards the same end
    (e.g. rules about symmetric arguments)."
   [pvecs]
-  (let [by-pvec (group-by :pvec-lits (vals pvecs))]
+  (let [by-pvec (group-by :pvec-props (vals pvecs))]
     (->> (reduce-kv (fn [res _ pv] (conj res (first pv))) [] by-pvec)
          (reduce (fn [res pv] (assoc res (:proof-id pv) pv)) {}))))
 
 ;;; ToDo: (1) Why make pvec-lits here? Shouldn't it only be run on run-one?
-;;;       (2) Can't this whole thing be done on a per-proof basis (meaning change walk-rules and explain).
+;;;       (2) Can't this whole thing be done on a per-proof basis? (Entails changing walk-rules and explain too.)
 (defn flatten-proofs
   "Collect vectors describing how each proof navigates :raw-proofs to some collection of
    grounded LHSs, facts and assumptions.
@@ -1027,8 +1045,8 @@
                  ;; This one makes the pvec-lits used for prop-ids and MaxSAT generally.
                  (reduce-kv (fn [res proof-id pvec-map]
                               (assoc res proof-id
-                                     (assoc pvec-map :pvec-lits
-                                            (-> (remove (fn [pred] (some #(= pred %) observations))  ; <=======================================================
+                                     (assoc pvec-map :pvec-props
+                                            (-> (remove (fn [pred] (some #(= pred %) observations))  ; <======================================================= Don't remove query???
                                                         (->> pvec-map :steps (map :step)))
                                                 distinct
                                                 vec))))
@@ -1143,8 +1161,8 @@
 ;;; (rule-product eee :rule-4 (:rule-4 (tailtab eee '(ta/conceptType ta/DemandType demand))))
 ;;; (rule-product eee :rule-2 (:rule-2 (tailtab eee '(ta/conceptType ta/DemandType demand))))
 (defn rule-product
-  "Return a lazy sequence that is the Cartesian product of literals relevant to the query and rule.
-   Literals are relevant to the query if
+  "Return a lazy sequence that is the Cartesian product of forms relevant to the query and rule.
+   Forms are relevant to the query if
     (1) they are values in the rule's tailtab, or
     (2) they are datatab elements that unify with (non-ground) value in the tailtab.
   rule-tailtabe is the tailtab map for one rule (the one corresponding to :rule-id."
@@ -1156,13 +1174,13 @@
                          ;;#p pred-sym
                          (->> (update plustab rt-key
                                       into
-                                      (reduce (fn [res lit] ; lit is really a predicate form.
-                                                (if (ground? lit)
+                                      (reduce (fn [res form]
+                                                (if (ground? form)
                                                   res
                                                   (into res
-                                                        (filter #(uni/unify lit %)
+                                                        (filter #(uni/unify form %)
                                                                 (consistent-cvar-naming
-                                                                 kb rule-id ix (get datatab (first lit)))))))
+                                                                 kb rule-id ix (get datatab (first form)))))))
                                               []
                                               (get rule-tailtab rt-key)))
                               (reduce-kv (fn [m k v] (assoc m k (distinct v))) {}))))
@@ -1567,7 +1585,7 @@
                    (update :losers (fn [loo]
                                      (into loo
                                            (if (> (count losers) 2)
-                                             (subvec (filterv #(loser-fn (-> kb :proof-vecs % :pvec-lits)) losers) 0 2)
+                                             (subvec (filterv #(loser-fn (-> kb :proof-vecs % :pvec-props)) losers) 0 2)
                                              losers)))))
                (update kb :proof-vecs #(reduce-kv (fn [res proof-id pvec]
                                                     (if (winners proof-id)
@@ -1662,8 +1680,8 @@
     (if (> num-sols solution-number)
       (do (cl-format stream "~%")
           (doseq [sol (:mpe kb)]
-            (cl-format stream "~%Sol~2d: cost:  ~4d, model: ~A,  proof: ~A,  :pvec-lits ~A"
-                       (apply max (:model sol)) (:cost sol) (:model sol) (:proof-id sol) (:pvec-lits sol))))
+            (cl-format stream "~%cost:  ~4d, model: ~A,  satisfies: ~A,  :pvec-props ~A"
+                        (:cost sol) (:model sol) (:proof-id sol) (:pvec-props sol))))
       ;; No solutions, so just show p-inv
       (cl-format stream "No solution.~2%~{~A~%~}"
                  (->> kb :prop-ids clojure.set/map-invert vec (sort-by first))))
@@ -1671,7 +1689,13 @@
 
 (defn report-prop-ids
   [kb stream]
-  (cl-format stream "~2%~{~A~%~}" (sort-by second (:prop-ids kb))))
+  (let [query (:query kb)]
+    (cl-format stream "~%")
+    (doseq [prop-id (sort-by second (:prop-ids kb))]
+      (if (= query (first prop-id))
+        (cl-format stream "~%~A  (The query)" prop-id)
+        (cl-format stream "~%~A" prop-id)))
+    (cl-format stream "~%")))
 
 (defn name2num
   "Return the number n of :fact-n or :rule-n."

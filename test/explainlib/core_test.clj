@@ -79,13 +79,6 @@ c This is a comment.  'c' in first column, then a space!
 36                -3                  -7        -9    0
 36                          -5                  -9    0")
 
-;;; 1 : 70        1           0
-;;; 2 : 30       -1           0
-;;; 3 : 20              2     0
-;;; 4 : 80             -2     0
-;;; 5 : 90        1    -2     0
-;;; 6 : 20       -1     2     0
-;;; 7 : 10       -1    -2     0
 (deftest maxsat-tests
   (testing "that max-sat problems work."   ; The individual incurs the cost if they disagree on ALL literals of the WCNF line. (See numbered lines above.)
     (is (= [{:model [1,  -2], :cost 70}    ; L2 + L3 + L6      = 30 + 20 + 20      = 70
@@ -196,7 +189,7 @@ c This is a comment.  'c' in first column, then a space!
 ;;;==================================== Meaning of clauses  =====================================
 (defkb park-kb
   "A KB for testing the problem from Park (2002) 'Using Weighted MAX-SAT engines to solve MPE'. (D is unlikely, C helps a little)."
-  :global-disjoint? true
+  :all-individuals? true
   :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
   :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
@@ -326,7 +319,7 @@ c This is a comment.  'c' in first column, then a space!
 
 (defkb road-is-slow-kb
   "The blocked road KB. From a ProbLog example, I think."
-  :global-disjoint? true
+;  :global-disjoint? true
   :rules  [{:prob 0.8 ; Thus it is the more reliable rule.
             :head (road-is-slow ?loc)
             :tail [(heavy-snow ?loc) (bad-road-for-snow ?loc)]}

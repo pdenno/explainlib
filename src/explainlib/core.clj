@@ -124,8 +124,8 @@
   "Return a literal. It looks like {:pred (some form) :neg? true|false}.
    Handles only predicates and negated predicates."
   [form]
-  (if (= (first form) 'not)
-    {:pred (-> form second varize) :neg? true}
+  (if (= (first form) :fact/not)
+    {:pred (-> form rest varize) :neg? true :factual-not? true}
     {:pred (varize form) :neg? false}))
 
 (defn lit2form
@@ -259,14 +259,15 @@
     (update ?kb :facts finalize-facts)))
 
 (defn rewrite-rule-factual-nots
-  "A NOT can be used in the RHS of a rule (See park-kb testcase.)
+  "This is called by defkb.
+   A NOT can be used in the RHS of a rule (See park-kb testcase.)
    (not (pred ?x ?y)) is rewritten as (fnot-pred ?x ?y) with metadata {:factual-not? true}"
   [rule]
   (update rule :tail
           (fn [tail] (mapv #(if (= 'not (first %))
                               (with-meta
                                 (let [[pred-sym & args] (second %)]
-                                  (conj args (->> pred-sym name (symbol "fnot"))))
+                                  (-> [:fact/not pred-sym] (into args)))
                                 {:factual-not? true
                                  :parent-fact (second %)})
                               %)
@@ -300,7 +301,7 @@
            :or {rules                      []
                 facts                      []
                 observations               []
-                eliminate-by-assumptions   []
+                eliminate-by-assumptions   #{}
                 elimination-priority       []
                 global-disjoint?           false ; Say this explicitly for default-params map.
                 cost-fn                    rc2-cost-fn #_neg-log-cost-fn
@@ -327,12 +328,13 @@
                                          :default-assume-prob        ~default-assume-prob
                                          :requires-evidence?         ~requires-evidence?
                                          :elimination-threshold      ~elimination-threshold
-                                         :elimination-priority       '~elimination-priority}
+                                         :elimination-priority       '~elimination-priority
+                                         :eliminate-by-assumptions   '~eliminate-by-assumptions}
                                 :rules '~rw-rules
                                 :facts '~(add-facts-for-factual-nots facts rw-rules)
                                 :assumptions-used (atom {})
-                                :observations '~observations
-                                :eliminate-by-assumptions '~eliminate-by-assumptions}))))))
+                                :observations '~observations}))))))
+
 
 (defkb _blank-kb "This KB is used to define the following default- vars.")
 (def default-params (-> _blank-kb :params))
@@ -567,9 +569,12 @@
    Most of the predicates are from proof vecs, but some are from inverse rules,
    which aren't part of proofs, of course, but are part of cost penalties."
   [game-kb]
-  (reset! diag game-kb)
-  (let [lits (->> game-kb :proof-vecs vals (mapcat :steps) (map :form) distinct (sort-by first))]
-    (zipmap lits (range 1 (-> lits count inc)))))
+  (let [lits (->> game-kb :proof-vecs vals (mapcat :steps) (map :form) distinct)
+        fnots  (filter #(= :fact/not (first %)) lits)
+        normal? (-> (remove #(= :fact/not (first %)) lits) set)]
+    (when-let [bad (some #(when-not (normal? %) %) (map rest fnots))]
+      (log/warn "Factual not predicate" bad "does not have a corresponding positive predicate."))
+    (zipmap (sort-by first normal?) (range 1 (-> normal? count inc)))))
 
 ;;; This is useful for unifying the tail of a rule with (1) kb, or
 ;;; (2) propositions from proofs used in the cnf of 'NOT rules'."
@@ -727,15 +732,14 @@
                      (if v
                        (assoc m k v)
                        (let [prob (fact-probability (get prop-ids-inv (abs k)) truthy)]
-                         (reset! diag {:prop-ids-inv prop-ids-inv :k k :kb kb})
                          (assoc m k (if (pos? k) prob (- 1.0 prob))))))
                    {} ?r)))))
 
 (defn python-maxsat
-  "Run a python RC2 MAXSAT problem. Return a p
-   The idea of running MAXSAT is to turn proofs and data into 'individuals' or 'worlds' matching the proofs.
-   Later in the program, we calculate the probability of each proof by means of model counting the
-   probabilities of the individuals conforming to each proof."
+  "Run a python RC2 MAXSAT problem. Return a vector describing results.
+   The idea of running MAXSAT is to run a weighted satisifaction problem.
+   N.B. Getting the cost of each individual solution is trivial; the true value of MAXSAT is realized
+   when there are :protected clauses. In those cases it can solve a non-trivial satisfaction problem."
   [{:keys [wdimacs z-var2proof-id] :as kb}]
   (let [proof-ids (->> kb :proof-vecs keys)
         ;; map indexed by proof of pids and their inverse probability values.
@@ -980,43 +984,53 @@
         (:fact-used? form) :fact?
         (:assumption-used? form) :assumption?))
 
-(defn walk-rules
-  "Return vectors of vectors of 'path-maps' that result from navigating each proof and collecting what is asserted.
+(defn flatten-proof
+  "Return a 'path-maps' that result from navigating each proof and collecting what is asserted.
    Each path-map has a :form that describes one step in the naviatation.
-   [[{:form <a ground atom> :rule? true}...],...,[{:form <a ground atom>...}...]]
+   {:form <a ground atom> :rule? true}...],...,[{:form <a ground atom>...}...]
 
    When, in the naviagation, a 'role' can be achieved by multiple assertions, the path is duplicated,
    one for each role-filler, and navigation continues for each new path individually.
    The nodes (:form) navigated are 'heads' 'observations' 'facts' and 'assumptions'."
-  [proofs]
-  (letfn [(walk-rule [rule path]
-            (let [rule-id (:rule-used rule)
-                  lhs (:proving rule)]
-              (loop [roles (:decomp rule)
-                     new-paths (vector (conj path {:form lhs :rule? true :rule-id rule-id}))]
-                (if (empty? roles)
-                  new-paths
-                  (recur
-                   (rest roles)
-                   (let [result (atom [])]
-                     (doseq [rhs-proof (-> roles first :proofs)
-                             old-path new-paths]
-                       (if (:rule-used? rhs-proof)
-                         (swap! result into (walk-rule rhs-proof old-path))
-                         (swap! result conj (conj old-path (cond-> {} ; It is not using a rule.
-                                                            true                   (assoc :form (if (:negated-prvn? rhs-proof) `(~'not ~(:prvn rhs-proof)) (:prvn rhs-proof)))
-                                                            true                   (assoc (pick-key rhs-proof) true)
-                                                            (:fact-id rhs-proof)   (assoc :fact-id (:fact-id rhs-proof))
-                                                            (:assume-id rhs-proof) (assoc :assume-id (:assume-id rhs-proof))
-                                                            true                   (assoc :rule-id rule-id))))))
-                     @result))))))]
-     (mapcat #(if (:rule-used? %) (walk-rule % []) (vector (:prv %))) proofs)))
+  ([proof] (if (:rule-used? proof) ; Typically called at top-level with just the raw-proof like this.
+             (flatten-proof proof [])
+             (vector (:prv proof))))
+  ([rule path]
+   (let [rule-id (:rule-used rule)
+         lhs (:proving rule)]
+     (loop [roles (:decomp rule)
+            new-paths (vector (conj path {:form lhs :rule? true :rule-id rule-id}))]
+       (if (empty? roles)
+         new-paths
+         (recur
+          (rest roles)
+          (let [result (atom [])]
+            (doseq [rhs-proof (-> roles first :proofs)
+                    old-path new-paths]
+              (if (:rule-used? rhs-proof)
+                (swap! result into (flatten-proof rhs-proof old-path))
+                (swap! result conj (conj old-path (cond-> {} ; It is not using a rule.
+                                                    true                   (assoc :form (if (:negated-prvn? rhs-proof) `(~'not ~(:prvn rhs-proof)) (:prvn rhs-proof)))
+                                                    true                   (assoc (pick-key rhs-proof) true)
+                                                    (:fact-id rhs-proof)   (assoc :fact-id (:fact-id rhs-proof))
+                                                    (:assume-id rhs-proof) (assoc :assume-id (:assume-id rhs-proof))
+                                                    true                   (assoc :rule-id rule-id))))))
+            @result)))))))
+
+;;; ToDo: Maybe move the body of this into explain. Thing is, the comment seems nice!
+(defn flatten-proofs
+  "Collect vectors describing how each proof navigates :raw-proofs to some collection of
+   grounded LHSs, facts and assumptions.
+   The :steps is a depth-first navigation of the proof: each form of the rhs of the of a rule
+   is expanded completely onto :steps before moving expanding the next form of the rhs."
+  [raw-proofs]
+  (mapcat flatten-proof (:proofs raw-proofs)))
 
 ;;; ToDo: Is this reflective of a flaw in the user's KB? Unnecessary?
-(defn winnow-regardless
+(defn winnow-by-assumption
   "Remove all proofs containing predicate symbols on (:eliminate-by-assumptions kb) that are used as assumptions."
-  [kb pvecs]
-  (if-let [elim (not-empty (-> kb :eliminate-by-assumptions))]
+  [pvecs assume-set]
+  (if-let [elim (not-empty assume-set)]
     (let [start-count (count pvecs)
           eliminate? (set elim)
           result (remove (fn [pvec] (some #(and (:assumption? %) (eliminate? (-> % :form first))) pvec)) pvecs)]
@@ -1030,52 +1044,36 @@
   "If there are more than :elimination-threshold proofs, remove those that
    include assumptions that involve predicate symbols in :elimination-priority
    until the theshold is met or you run out of symbols on :elimination-priority."
-  [kb pvecs]
-  (let [threshold (-> kb :params :elimination-threshold)]
-    (loop [order (-> kb :params :elimination-priority)
-           pvecs pvecs]
+  [pvecs threshold priority]
+  (loop [order priority
+         pvecs pvecs]
       (let [cnt (count pvecs)]
         (if (or (empty? order) (< cnt threshold)) pvecs
             (let [pred-sym (first order)
                   smaller (remove (fn [pvec] (some #(and (:assumption? %) (= pred-sym (-> % :form first))) pvec)) pvecs)]
               (when-not (zero? (- cnt (count smaller)))
                 (log/info "Removed" (- cnt (count smaller)) "proofs containing assumption" pred-sym))
-              (recur (rest order) smaller)))))))
+              (recur (rest order) smaller))))))
 
-;;; ToDo: I'm not convinced that this is necessary.
-(defn distinct-proof-vecs
-  "Filter out duplicates in the sense of two or more have the same :pvec-props.
-   This is possible owing to using different rules towards the same end
-   (e.g. rules about symmetric arguments)."
-  [pvecs]
-  (let [by-pvec (group-by :pvec-props (vals pvecs))]
-    (->> (reduce-kv (fn [res _ pv] (conj res (first pv))) [] by-pvec)
-         (reduce (fn [res pv] (assoc res (:proof-id pv) pv)) {}))))
-
-;;; ToDo: (1) Why make pvec-lits here? Shouldn't it only be run on run-one?
-;;;       (2) Can't this whole thing be done on a per-proof basis? (Entails changing walk-rules and explain too.)
-(defn flatten-proofs
-  "Collect vectors describing how each proof navigates :raw-proofs to some collection of
-   grounded LHSs, facts and assumptions.
-   The :steps is a depth-first navigation of the proof: each form of the rhs of the of a rule
-   is expanded completely onto :steps before moving expanding the next form of the rhs."
-  [kb]
-  (let [observations (conj (:observations kb) (:query kb))
-        result (as-> (walk-rules (-> kb :raw-proofs :proofs)) ?pvecs
-                 (winnow-regardless kb ?pvecs)
-                 (winnow-by-priority kb ?pvecs)
+(defn winnow-proofs
+  "Process the simple proof-vecs eliminating some proofs according to parameters.
+   Add :pvec-props, which lists the propositions used in the proof.
+   Return a map keyed by a newly created name for the proof, for example, :proof-1, etc."
+  [proof-vecs observations+ {:keys [elimination-threshold elimination-priority eliminate-by-assumptions]}]
+  (let [result (as-> proof-vecs ?pvecs
+                 (winnow-by-assumption ?pvecs eliminate-by-assumptions)
+                 (winnow-by-priority ?pvecs elimination-threshold elimination-priority)
                  (zipmap (map #(keyword (str "proof-" %)) (range 1 (inc (count ?pvecs)))) ?pvecs)
                  (reduce-kv (fn [res id pvec] (assoc res id {:proof-id id :steps pvec})) {} ?pvecs)
                  ;; This one makes the pvec-lits used for prop-ids and MaxSAT generally.
                  (reduce-kv (fn [res proof-id pvec-map]
                               (assoc res proof-id
                                      (assoc pvec-map :pvec-props
-                                            (-> (remove (fn [pred] (some #(= pred %) observations))
+                                            (-> (remove (fn [pred] (some #(= pred %) observations+))
                                                         (->> pvec-map :steps (map :form)))
                                                 distinct
                                                 vec))))
-                            {} ?pvecs)
-                 (distinct-proof-vecs ?pvecs))]
+                            {} ?pvecs))]
     (when (empty? result)
       (throw (ex-info "No proof vecs remaining." {})))
     result))
@@ -1318,9 +1316,11 @@
   (->> kb
        :facts
        vals
-       (reduce (fn [res fact] (conj res
-                                    (-> {:id (:id fact)}
-                                        (assoc :form (-> fact :cnf first lit2form)))))
+       (reduce (fn [res fact]
+                 ;(log/info "fact=" fact "pred meta:" (-> fact :cnf first :pred meta))
+                 (conj res
+                       (-> {:id (:id fact)}
+                           (assoc :form (-> fact :cnf first lit2form)))))
                [])
        (map (fn [fact] (when-let [subs (uni/unify prv (:form fact))]
                          (when-not (empty? subs) (merge-bindings! subs :source "FACT"))
@@ -1380,11 +1380,12 @@
   "Run consistent-call filtering on solutions.
    It has fancy map args for easier debugging."
   [sols caller rule]
-  (filter #(consistent-call? {:caller caller
-                              :called {:rule-id (:id rule)
-                                       :lhs (:head rule)
-                                       :bindings (:bindings %)}})
-          sols))
+  (-> (filter #(consistent-call? {:caller caller
+                                  :called {:rule-id (:id rule)
+                                           :lhs (:head rule)
+                                           :bindings (:bindings %)}})
+              sols)
+      distinct))
 
 (declare prove-fact)
 
@@ -1413,6 +1414,7 @@
                                          (assoc ?r :rhs-queries sol) ; ToDo: Problem here that each component might be...??? (lost it)
                                          (assoc ?r :decomp
                                                 (doall (mapv (fn [prv]
+                                                               (log/info "rule-solve: prv=" prv "meta =" (meta prv))
                                                                (let [prv (progressive-bind prv (top-scope))]
                                                                  (merge-bindings! (merge (:bindings sol) (:bindings caller)) :source prv)
                                                                  (prove-fact kb {:prv prv ; top-scope is thereby progressively updated..., I think!
@@ -1433,6 +1435,7 @@
    Where suitable rules, observations, and facts aren't found, this adds assumptions."
   [kb {:keys [prv caller] :as proof}]
   (dbg-scope "PROOF FOR" prv "caller=" caller)
+  (log/info "prv=" prv)
   (let [proof (assoc proof :proofs [])
         heads (->> kb :rules vals (map :head))
         bound (atom nil)]
@@ -1442,7 +1445,7 @@
                                                                                                 (assoc :fact-id (:id %)))
                                                                                            @bound)),
           (some (fn [head] (uni/unify head prv)) heads)    (update proof :proofs into (rule-solve kb prv caller))
-          :else                                            (let [{:keys [subs form id] :as assume} (add-assumption kb prv)]
+          :else                                            (let [{:keys [subs form id]} (add-assumption kb prv)]
                                                              (update proof :proofs conj (-> {:assumption-used? true}
                                                                                             (assoc :assume-id id)
                                                                                             (assoc :prvn (uni/subst form subs))))))))
@@ -1495,7 +1498,7 @@
   [kb]
   (let [data (-> []
                  (into (:observations kb))
-                 (into (map #(-> % :cnf first :pred) (vals (:facts kb)))))]
+                 (into (->> kb :facts vals (map #(-> % :cnf first :pred)))))]
     (group-by first data)))
 
 (defn random-games
@@ -1547,6 +1550,7 @@
     (assoc ?game-kb :z-vars (z-vars ?game-kb))
     (assoc ?game-kb :z-var2proof-id (zipmap (:z-vars ?game-kb) (-> ?game-kb :proof-vecs keys)))
     (assoc ?game-kb :wdimacs (wdimacs-string ?game-kb))
+    (reset! diag ?game-kb) ; Might be good to keep this one around.
     (if pretty-analysis?
       (as-> ?game-kb ?g2
         (update ?g2 :pclauses (fn [pcs] (mapv (fn [pc] ; This sorting for pretty wdimacs?
@@ -1677,15 +1681,17 @@
 (defn explain
   "Toplevel function to adduce proof trees, generate the MAXSAT problem,
    run it, and translate the result back to predicates."
-  [query kb & {:keys[loser-fn max-together] :or {loser-fn identity max-together 10}}]
-  ;(log/info "Starting explanation of" query)
+  [query kb & {:keys[loser-fn max-together observations params] :or {loser-fn identity max-together 10}}]
+  (let [observations+ (conj observations query kb)]
     (as->  kb ?kb
       (finalize-kb ?kb query)
       (clear! ?kb)
       (assoc  ?kb :datatab         (datatab ?kb))
       (assoc  ?kb :raw-proofs      (prove-fact ?kb {:prv query :top? true :caller {:bindings {}}}))
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
-      (assoc  ?kb :proof-vecs      (flatten-proofs ?kb))
+      (assoc  ?kb :proof-vecs      (flatten-proofs (:raw-proofs ?kb)))
+      (update ?kb :proof-vecs     #(winnow-proofs % observations+ params))
+      (reset! diag ?kb)
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
       (update ?kb :pclauses       #(into % (inverse-facts ?kb)))
@@ -1693,7 +1699,7 @@
       (update ?kb :pclauses       #(into % (add-not-head-pclauses ?kb)))
       (assoc  ?kb :pclauses        (reduce-pclauses ?kb))
       (update ?kb :pclauses       #(add-id-to-comments %))
-      (run-problem ?kb :loser-fn loser-fn :max-together max-together)))
+      (run-problem ?kb :loser-fn loser-fn :max-together max-together))))
 
 ;;;======================================= Reporting ====================================
 (defn report-problem

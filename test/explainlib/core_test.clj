@@ -200,7 +200,7 @@ c This is a comment.  'c' in first column, then a space!
 ;;;  -c |  0.7                        c   -d   |   0.8    INV  c ->  d                0.24
 ;;;                                  -c    d   |   0.1        -c ->  d                0.07
 ;;;                                  -c   -d   |   0.9    INV -c ->  d                0.63 (Since these are all possible individuals, the sum is 1.0.)
-;;; Note that the things you get back from explain are the costs of clauses you violated; lowest cost is the most likely explanation but to
+;;; Note that the things you get back from MAXSAT are the costs of clauses you violated; lowest cost is the most likely explanation but to
 ;;; get a probability back you'd have to plug the answer back into the Bayes net. (Not implemented owing to need to study "model counting" more.)
 
 (deftest park-concept
@@ -446,11 +446,12 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
 
 ;;;------ Tests for the above KBs ----------------------------
-(deftest good-explanations
+;;;  For more information about these, use, for example, (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) ex/report-results)
+(deftest good-simple-cases
   (testing "That MPE is getting good results."
     (testing "Example from Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"
-      #_(is (= :to-do
-             (-> (explain '(dee foo) park-kb) filter-to-simple-mpe)))
+      (is (= {:proof-1 0.51, :proof-2 0.91}
+             (-> '(dee foo) (explain park-kb) :mpe :summary))))
 
     #_(testing "ToDo: describe"
         #_(is (= #{{:model [  1  -2] :cost    80}
@@ -458,20 +459,17 @@ c This is a comment.  'c' in first column, then a space!
                    {:model [ -1   2] :cost   511}}
                  (-> (explain '(alarm plaza) alarm-kb) filter-to-simple-mpe)))) ; <============== compare lists problem; Seem to be playing games!
 
-    (testing "Testing that where there are no difference in probability, there are no differences in cost."
-      (is (= [{:cost 504, :pvec '[(accident mt-pass) (clearing-wreck ?x-f4 mt-pass)]}
-              {:cost 504, :pvec '[(heavy-snow mt-pass) (bad-road-for-snow mt-pass)]}]
-             (-> (explain '(road-is-slow mt-pass) road-is-slow-even-kb) filter-to-simple-mpe))))
+    (testing "Testing that where there are no difference in fact and rule probability, proofs are equi-probable."
+      (is (= {:proof-1 0.020800000000000003, :proof-2 0.020800000000000003}
+             (-> '(road-is-slow mt-pass) (explain road-is-slow-even-kb) :mpe :summary))))
 
-    (testing "Testing rule probabilities. The rule for heavy-snow is more reliable." ; <============ WRONG!
-      (is (= [{:cost 504, :pvec '[(accident mt-pass) (clearing-wreck ?x-f4 mt-pass)]}
-              {:cost 549, :pvec '[(heavy-snow mt-pass) (bad-road-for-snow mt-pass)]}]
-             (-> (explain '(road-is-slow mt-pass) road-is-slow-kb) filter-to-simple-mpe))))
+    (testing "Testing rule probabilities. The rule for heavy-snow is more reliable."
+      (is (= {:proof-1 0.03328000000000002, :proof-2 0.020800000000000003}
+             (-> '(road-is-slow mt-pass) (explain road-is-slow-kb) :mpe :summary))))
 
     (testing "Favor explanations that don't have a default low-probability assumption. (It warns about it.)"
-      (is (= [{:cost 493, :pvec '[(heavy-snow mt-pass) (bad-road-for-snow mt-pass)]}
-              {:cost 573, :pvec '[(accident mt-pass) (clearing-wreck $crew-r2-skolem-1 mt-pass)]}]
-             (-> (explain '(road-is-slow mt-pass) road-is-slow-assumption-kb) filter-to-simple-mpe))))
+      (is (= {:proof-1 0.02040000000000001, :proof-2 0.010400000000000001}
+             (-> '(road-is-slow mt-pass) (explain road-is-slow-assumption-kb) :mpe :summary))))
 
     #_(testing "ToDo: describe"
         (is (=  [{:model [ 1 -2 -3  4 -5 -6], :cost 220}
@@ -489,9 +487,8 @@ c This is a comment.  'c' in first column, then a space!
                  {:model [ 1  2 3 4], :cost 1036}}
                (-> (explain '(allDifferent doesJob) concepts2-kb) filter-to-simple-mpe))))
     (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
-      (is (= [{:cost 439, :pvec '((backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2))}
-              {:cost 813, :pvec '((failing-sensor robot-8 joint-2) (bad-sensor-processing robot-8))}]
-             (-> (explain '(inaccurate-tcp robot-8) mfglet-kb) filter-to-simple-mpe)))))))
+      (is (= {:proof-1 0.24652800000000008, :proof-2 0.06311199999999999}
+             (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) :mpe :summary))))))
 
 
 ;;;==================================== Other one- and two-rule MPE =====================================

@@ -34,7 +34,7 @@
 
 ;;; For debugging
 (def diag  (atom {}))
-(defn break-here [obj]  obj)
+(defn break-here [obj]  (reset! diag obj))
 
 ;;; facts            = Predicates with associated probability.
 ;;; observations     = Predicates without associated probability. These are used to simply pclauses. See use of :remove? in several places.
@@ -54,6 +54,14 @@
 ;;; raw proof        = A (typically deeply) nested structure describing use of facts, assumptions and inference to 'explain' the query form.
 ;;; proof-vec        = A flattened version of a raw proof. It contains :steps and :pvec-props.
 ;;; game             = A collection of proofs used in a MAXSAT analysis. When a query results in many proofs, subsets of all games compete in a tournament.
+;;; factual-not      = A rule can have 'nots' in them; either
+;;;                       RHS: (not (bigger-set ?y ?x)) := (bigger-set ?x ?y) or
+;;;                       LHS: (alarm ?loc) := (not (burglary ?loc)) (earthquake ?loc)
+;;;                    Idea of a factual not is to maintain the fact as a simple list by simply adding :fact/not before the predicate, e.g. (:fact/not bigger-set ?y ?x).
+;;;                    To these forms is added meta {:factual-not? true}. These measures are to distinguish such predicates from generated negative literals e.g. in pclauses.
+;;;                    Note that (:fact/not ...)-style propositions are also used in pclauses as are their :neg? (Their ordinary form is the positive (:neg? false) and
+;;;                    {:cnf [{:pred (:fact/not pred-sym...) :neg? true}]} is allowed and is the double negative of the base proposition (pred-sym ...).
+;;;                    Use of :neg? is restricted to pclauses for CNF, not a thing for generation of proofs.
 
 ;;; ToDo: kb should disallow cycles in rules.
 (s/def ::neg?    boolean?)
@@ -83,25 +91,77 @@
                        :empty  #(-> % :cnf empty?)))
 (s/def ::bindings (s/and map? #(every? cvar? (keys %))))
 (s/def ::binding-stack (s/and vector? (s/coll-of ::bindings :min-count 0)))
+(s/def ::proposition (s/or :typical #(and (seq? %) (-> % first symbol?))
+                           :fnot    #(and (seq? %)
+                                          (-> % meta :factual-not?)
+                                          (= :fact/not (first %))
+                                          (-> % second symbol?))))
 
 (defn varize
-  "Add :var? metadata to variables of obj."
+  "Respectively, add :cvar? and :factual-not? metadata to variables and :fact/not predicates of obj."
   ([obj] (varize obj ""))
   ([obj suffix]
-   (walk/postwalk (fn [x]
-                    (cond (and (symbol? x) (= \? (-> x name first)))
-                          (with-meta (-> x name (str suffix) symbol) {:cvar? true}),
-                          (= x 'not)
-                          (with-meta x {:logical? true}),
-                          :else
-                          x))
-                  obj)))
+   (letfn [(vize [obj]
+             (cond (and (list? obj) (= (first obj) ':fact/not))       (with-meta (conj (map vize (rest obj)) :fact/not) {:factual-not? true}),
+                   (and (symbol? obj) (= \? (-> obj name first)))     (with-meta (-> obj name (str suffix) symbol) {:cvar? true})
+                   (list? obj)                                        (map vize obj)
+                   (vector? obj)                                      (mapv vize obj)
+                   (map? obj)                                         (reduce-kv (fn [m k v] (assoc m (vize k) (vize v))) {} obj)
+                   :else                                              obj))]
+     (vize obj))))
+
+(defn fact-not?
+  "Return the rest of the proposition (the part without the not) the fact is a factual-not."
+  [fact]
+  (when (and (seq? fact) (-> fact meta :factual-not?))
+    (rest fact)))
+
+(defn good-fnot-meta? ; ToDo: Move to env/dev?
+  "Walk through a structure and return it untouched if the the fnot propositions have the necessary metadata."
+  ([obj] (good-fnot-meta? obj nil))
+  ([obj tag]
+   (letfn [(c4fn [x]
+             (cond (map? x)                                    (reduce-kv (fn [m k v] (assoc m (c4fn k) (c4fn v))) {} x)
+                   (vector? x)                                 (mapv c4fn x)
+                   (and (seq? x) (= :fact/not (first x)))      (if (s/valid? ::proposition x)
+                                                                 x
+                                                                 (throw (ex-info "fnot proposition does not have meta:" {:tag tag :specific x :part-of obj})))
+                   (seq? x)                                   (map c4fn x)
+                   :else                                       x))]
+     (doall (c4fn obj)))))
+
+;;; ToDo: I'm not quite happy with this design. Metadata on proposition other than :factual-not? could be lost.
+;;;       The conundrum is that propositions are simple objects and I'd like to keep them this way.
+;;;       Of course, I could search out all the places this is used and store the metadata before the new object is created.
+;;;       There are currently 4 places where this is needed.
+(defn reapply-fnot-meta
+  "meta on fnot propositions is lost when new propositions are made from old ones. This adds it back."
+  [obj]
+  (letfn [(mb [x]
+             (cond (map? x)                                  (reduce-kv (fn [m k v] (assoc m (mb k) (mb v))) {} x)
+                   (vector? x)                               (mapv mb x)
+                   (and (seq? x) (= :fact/not (first x)))    (with-meta x (assoc (meta x) :factual-not? true))
+                   (seq? x)                                  (map mb x)
+                   :else                                      x))]
+    (mb obj)))
+
+(defn unify*
+  "uni/unify but with additional provisions when :fact/not."
+  [x y]
+  (s/assert ::proposition x) ; ToDo: only propositions here, right?
+  (s/assert ::proposition y)
+  (let [x* (if (fact-not? x) (rest x) x)
+        y* (if (fact-not? y) (rest y) y)]
+    (when (or (= :fact/not (first x*)) (= :fact/not (first y*))) ; ToDo: This check is just for development?
+      (log/error ":fact/not without proper metadata: x =" x "y =" y)
+      (throw (ex-info ":fact/not without proper metadata:" {:x x :y y})))
+    (uni/unify x* y*)))
 
 (defn collect-vars
   "Return a set of all the vars in a argument form"
   [obj]
   (let [accum (atom #{})]
-    (walk/postwalk (fn [x](when (cvar? x) (swap! accum conj x))) obj)
+    (walk/postwalk (fn [x] (when (cvar? x) (swap! accum conj x))) obj)
     @accum))
 
 (defn ground?
@@ -117,24 +177,35 @@
 (defn opposite-lits?
   "Return true if the two literals are complements."
   [lit1 lit2]
-  (and (uni/unify (:pred lit1) (:pred lit2))
+  (and (unify* (:pred lit1) (:pred lit2))
        (not= (:neg? lit1) (:neg? lit2))))
 
 (defn form2lit
   "Return a literal. It looks like {:pred (some form) :neg? true|false}.
    Handles only predicates and negated predicates."
   [form]
-  (if (= (first form) :fact/not)
-    {:pred (-> form rest varize) :neg? true :factual-not? true}
-    {:pred (varize form) :neg? false}))
+  (s/assert ::proposition form)
+  (let [form (varize form)]  ; BTW varize preserves fnot meta.
+    (if (-> form meta :factual-not?)
+      {:pred form :neg? false} ; factual-not polarity untouched. (See definition of factual-not above.)
+      {:pred form :neg? false})))
 
-(defn lit2form
+#_(defn lit2form
   "Return the literal list form for the argument literal map."
   [lit]
   (varize
    (if (:neg? lit)
-     (list 'not (:pred lit))
+     (with-meta (list :fact/not (:pred lit)) {:factual-not? true})
      (:pred lit))))
+
+(defn lit2form
+  "Return the literal list form for the argument literal map.
+   Note that this doesn't care about polarity. :neg? is a pclause thing."
+  [lit]
+  (let [pred (:pred lit)]
+    (if (= :fact/not (first pred))
+      (with-meta pred {:factual-not? true})
+      pred)))
 
 (defn rule2cnf ; This ought to be called rule2horn!
   "Return the CNF corresponding to the rule, a vector of literal MAPS."
@@ -261,13 +332,12 @@
 (defn rewrite-rule-factual-nots
   "This is called by defkb.
    A NOT can be used in the RHS of a rule (See park-kb testcase.)
-   (not (pred ?x ?y)) is rewritten as (fnot-pred ?x ?y) with metadata {:factual-not? true}"
+   (not (pred ?x ?y)) is rewritten as (:fact/not pred ?x ?y) with metadata {:factual-not? true}"
   [rule]
   (update rule :tail
           (fn [tail] (mapv #(if (= 'not (first %))
                               (with-meta
-                                (let [[pred-sym & args] (second %)]
-                                  (-> [:fact/not pred-sym] (into args)))
+                                (conj (second %) :fact/not)
                                 {:factual-not? true
                                  :parent-fact (second %)})
                               %)
@@ -282,7 +352,7 @@
     (doseq [rule rules]
       (doseq [rhs-elem (:tail rule)]
         (when-let [parent (-> rhs-elem meta :parent-fact)]
-          (if-let [fmap (some #(when (uni/unify parent (:fact %)) %) facts)]
+          (if-let [fmap (some #(when (unify* parent (:fact %)) %) facts)]
             (swap! fact-atm conj {:prob (- 1.0 (:prob fmap)) :fact rhs-elem})
             (log/warn "Factual not (not in RHS of a rule) without corresponding fact:" rhs-elem)))))
     ;; ToDo: Would be nice were they to keep the order in they originally had.
@@ -376,13 +446,14 @@
                                               (assoc :remove? true)
                                               (assoc :prob 1.0)
                                               (assoc :comment (cl-format nil "OB ~A" (:form step))))
-            (:fact? step)                 (let [fact (some #(when (uni/unify  ground-atom (-> % :cnf first :pred)) %) facts)]
+            (:fact? step)                 (if-let [fact (some #(when (unify* ground-atom (-> % :cnf first :pred)) %) facts)]
                                             (-> fact
                                                 (assoc :fact? true)
                                                 (assoc :from (:id fact))
                                                 (assoc :cnf (vector {:pred ground-atom :neg? false}))
                                                 (assoc :using-proof (:using-proof ?pc))
-                                                (assoc :comment (cl-format nil "~A" ground-atom))))
+                                                (assoc :comment (cl-format nil "~A" ground-atom)))
+                                            (log/error "Cannot unify fact for pclause: ground-atom=" ground-atom "step=" step)) ; ToDo: checking for this should be temporary.
             (:assumption? step)           (as-> ?pc  ?a ; ?pc will be a mapp with one key: {:using-proof ...}
                                               (assoc ?a :assumption? true)
                                               (assoc ?a :used-in (set [proof-id]))
@@ -403,12 +474,12 @@
         rule-preds (into (vector (:head rule)) (:tail rule))
         ;; ToDo: This isn't perfect (mutually recursive rules might screw it up), but I'm avoiding those.
         ground-atoms (reduce (fn [res rule-pred]
-                               (conj res (some #(when (uni/unify rule-pred (-> % :form doall)) (:form %)) steps)))
+                               (conj res (some #(when (unify* rule-pred (:form %)) (:form %)) steps)))
                              []
                              rule-preds)
         bindings (reduce (fn [binds [pred fact]]
-                           (let [pred (if (= 'not (first pred)) (second pred) pred)]
-                             (merge binds (uni/unify pred fact))))
+                           (let [pred (if (-> pred :meta :factual-not?) (rest pred) pred)]
+                             (merge binds (unify* pred fact))))
                          {}
                          (map #(vector %1 %2) rule-preds ground-atoms))
         rule-pclause (-> rule
@@ -419,10 +490,9 @@
                          (assoc :from rule-id)
                          (update :cnf (fn [cnf] (mapv (fn [term] (update term :pred #(uni/subst % bindings))) cnf)))
                          (assoc :comment (str rule-id " "  bindings  " " (uni/subst (:head rule) bindings))))
-        non-rule-steps-used (reduce (fn [res g-rhs]
-                                      (conj res (some #(when (= g-rhs (:form %)) %) steps)))
+        non-rule-steps-used (reduce (fn [res g-rhs] (conj res (some #(when (= g-rhs (:form %)) %) steps)))
                                     []
-                                    (remove (fn [atm] (some #(uni/unify atm %) heads)) (rest ground-atoms)))]
+                                    (remove (fn [atm] (some #(unify* atm %) heads)) (rest ground-atoms)))]
     {:pclauses
      (into (vector rule-pclause)
            (mapv #(pclause-for-non-rule kb proof-id %) non-rule-steps-used))
@@ -437,7 +507,6 @@
                                      :else nil))
                              nil
                              (->> remaining deref count range))]
-             ;(when-not pos (reset! diag {:rem rem :remaining @remaining}))
              (swap! remaining #(into (subvec % 0 pos) (subvec % (inc pos))))))
          @remaining))}))
 
@@ -583,7 +652,7 @@
    into the argument that (completely) unifies the form"
   [form facts]
   (reduce (fn [subs gf]
-            (if-let [s (uni/unify form gf)]
+            (if-let [s (unify* form gf)]
               (conj subs s)
               subs))
           []
@@ -691,7 +760,7 @@
    Truthy is merge of kb :facts :rules and :assumptions."
   [form facts]
   (let [unifies-with (reduce (fn [res f]
-                               (if (uni/unify form (-> f :cnf first :pred))
+                               (if (unify* form (-> f :cnf first :pred))
                                  (conj res (:id f))
                                  res))
                              []
@@ -1010,11 +1079,12 @@
               (if (:rule-used? rhs-proof)
                 (swap! result into (flatten-proof rhs-proof old-path))
                 (swap! result conj (conj old-path (cond-> {} ; It is not using a rule.
-                                                    true                   (assoc :form (if (:negated-prvn? rhs-proof) `(~'not ~(:prvn rhs-proof)) (:prvn rhs-proof)))
+                                                    true                   (assoc :form (:prvn rhs-proof))
                                                     true                   (assoc (pick-key rhs-proof) true)
                                                     (:fact-id rhs-proof)   (assoc :fact-id (:fact-id rhs-proof))
                                                     (:assume-id rhs-proof) (assoc :assume-id (:assume-id rhs-proof))
-                                                    true                   (assoc :rule-id rule-id))))))
+                                                    true                   (assoc :rule-id rule-id)
+                                                    true                   (reapply-fnot-meta))))))
             @result)))))))
 
 ;;; ToDo: Maybe move the body of this into explain. Thing is, the comment seems nice!
@@ -1028,8 +1098,9 @@
 
 ;;; ToDo: Is this reflective of a flaw in the user's KB? Unnecessary?
 (defn winnow-by-assumption
-  "Remove all proofs containing predicate symbols on (:eliminate-by-assumptions kb) that are used as assumptions."
+  "Remove all proofs containing predicate symbols in (:eliminate-by-assumptions kb) that are used as assumptions."
   [pvecs assume-set]
+  (good-fnot-meta? pvecs "winnow-by-assumption (1)")
   (if-let [elim (not-empty assume-set)]
     (let [start-count (count pvecs)
           eliminate? (set elim)
@@ -1060,8 +1131,10 @@
    Add :pvec-props, which lists the propositions used in the proof.
    Return a map keyed by a newly created name for the proof, for example, :proof-1, etc."
   [proof-vecs observations+ {:keys [elimination-threshold elimination-priority eliminate-by-assumptions]}]
+  (good-fnot-meta? proof-vecs "winnow-proofs (1)")
   (let [result (as-> proof-vecs ?pvecs
                  (winnow-by-assumption ?pvecs eliminate-by-assumptions)
+                 (good-fnot-meta? ?pvecs "winnow-proofs (1.1)")
                  (winnow-by-priority ?pvecs elimination-threshold elimination-priority)
                  (zipmap (map #(keyword (str "proof-" %)) (range 1 (inc (count ?pvecs)))) ?pvecs)
                  (reduce-kv (fn [res id pvec] (assoc res id {:proof-id id :steps pvec})) {} ?pvecs)
@@ -1092,17 +1165,19 @@
   "Unify each of form in the fact-set against the tail (they are in the same order).
    If the form has a cvars return them as binding to themselves."
   [fact-set tail]
-  (doall (map (fn [form fact]
-                (let [cvars (collect-vars form)
-                      binds (uni/unify form fact)
-                      bkeys (keys binds)]
-                  (reduce (fn [res cvar]
-                            (if (some #(= cvar %) bkeys)
-                              res
-                              (assoc res cvar cvar)))
-                          binds
-                          cvars)))
-                  fact-set tail)))
+  ;(good-fnot-meta? fact-set "bindings+ fact-set")
+  ;(good-fnot-meta? tail "bindings+ tail")
+  (map (fn [form fact]
+         (let [cvars (collect-vars form)
+               binds (unify* form fact)
+               bkeys (keys binds)]
+           (reduce (fn [res cvar]
+                     (if (some #(= cvar %) bkeys)
+                       res
+                       (assoc res cvar cvar)))
+                   binds
+                   cvars)))
+       fact-set tail))
 
 ;;; (consistent-bindings? '((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2)   (p-4 y-1 z-bogo)) (-> ppp :rules vals first :tail)) ; false
 ;;; (consistent-bindings? '((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2)   (p-4 y-1 ?z-r1))  (-> ppp :rules vals first :tail)) ; true
@@ -1112,17 +1187,19 @@
   "The inside of the rule product transducer it filters inconsistent bindings AND incomplete bindings.
    An incomplete binding is where a variable is bound in one form and not in another."
   [fact-set tail]
-  (let [binds+ (bindings+ fact-set tail)
+  (let [fact-set (reapply-fnot-meta fact-set)
+        binds+ (bindings+ fact-set tail)
         combos (combo/combinations binds+ 2)]
     (reduce (fn [still-true? [m1 m2]]
-              (if (not still-true?) false
-                  (let [common-keys (filter #(contains? m2 %) (keys m1))]
-                    (every? #(let [m1-val (get m1 %)
-                                   m2-val (get m2 %)]
-                               (or #_(cvar? m1-val)
-                                   #_(cvar? m2-val)
-                                   (= m1-val m2-val))) ; incomplete means even cvars must match
-                            common-keys))))
+              (if (not still-true?)
+                false
+                (let [common-keys (filter #(contains? m2 %) (keys m1))]
+                  (every? #(let [m1-val (get m1 %)
+                                 m2-val (get m2 %)]
+                             (or #_(cvar? m1-val)
+                                 #_(cvar? m2-val)
+                                 (= m1-val m2-val))) ; incomplete means even cvars must match
+                          common-keys))))
             true
             combos)))
 
@@ -1132,22 +1209,30 @@
    to filter out tuples that don't consistently bind to the rule's RHS.
    With data (for debugging), it runs that filter."
   [tail & {:keys [data]}] ; data for debugging.
+  ;(good-fnot-meta? tail "frpt tail")
+  ;(good-fnot-meta? data "frpt data")
   (if data
     (filter #(consistent-bindings? % tail) data)
     (filter #(consistent-bindings? % tail))))
 
 (defn tailtab
-  "For each rule in which the head binds with the query, create a map indexed by the predicate symbols
-   of tails of rules whose head unifies with the argument query. The map values substitute bindings of
-   the unification into the predicates of the tail."
+  "For each rule in which the head binds with the query, create a map keyed by [rhs#, predicate-symbol]
+   of tails of rules whose head unifies with the argument query.
+   The map values substitute bindings of the unification into the predicates of the tail.
+   Return, for example, {:rule-1 {[1 burglary] ((burglary plaza)), [2 earthquake] ((earthquake plaza))},...}"
   [kb query]
   (let [cnt (atom 0)]
     (reduce (fn [res rule]
               (reset! cnt 0)
-              (if-let [binds (uni/unify query (:head rule))]
-                (reduce (fn [r pred]
-                          (update-in r (list (:id rule) (vector (swap! cnt inc) (first pred)))
-                                     #(conj % (uni/subst pred binds))))
+              (if-let [binds (unify* query (:head rule))]
+                (reduce (fn [res1 rhs-prop]
+                          (let [bare-prop  (or (fact-not? rhs-prop) rhs-prop)
+                                bound (uni/subst bare-prop binds)
+                                bound (if (fact-not? rhs-prop) (conj bound :fact/not) bound)
+                                bound (with-meta bound (meta rhs-prop))]
+                            (update-in res1 ; ToDo: Is indexing with (first bare-prop) what I want?
+                                       (list (:id rule) (vector (swap! cnt inc) (first bare-prop)))
+                                       #(conj % bound))))
                         res
                         (:tail rule))
                 res))
@@ -1172,7 +1257,7 @@
    ((py/linkBack demand Demand) (ta/conceptRefScheme ta/DemandType demand) (ta/conceptVar ta/DemandType demand) (ta/conceptDF ta/DemandType ?y-r2))
    Where the first predicate here binds ?y-r2 to demand. This function returns these predictes (a RHS) with all variables bound."
   [tail preds]
-  (let [bindings (uni/unify preds tail)]
+  (let [bindings (unify* preds tail)]
     (if bindings
       (uni/subst preds bindings)
       ;; otherwise inconsistent and will be caught later.
@@ -1199,7 +1284,7 @@
                                                 (if (ground? form)
                                                   res
                                                   (into res
-                                                        (filter #(uni/unify form %)
+                                                        (filter #(unify* form %)
                                                                 (consistent-cvar-naming
                                                                  kb rule-id ix (get datatab (first form)))))))
                                               []
@@ -1211,15 +1296,13 @@
     (->> (apply combo/cartesian-product (vals sets))
          (map #(complete-bindings tail %)))))
 
-;;; (rhs-binding-infos ppp '(p-lhs x-1 y-1))
-;;; (rhs-binding-infos eee '(ta/conceptType ta/DemandType demand))
-;;; (rhs-binding-infos eee '(ta/conceptSheet ta/DemandType ?y-r2))
 (defn rhs-binding-infos
   "This is called when prv is the LHS of at least one rule.
    It returns the RHSs that match it and the data, where those RHSs
    could require further expansion of rules or terminate in facts and assumptions.
    Thus it provides 'one step' of a proof." ; ToDo: I don't think prv needs to be ground.
   [kb prv]
+  (good-fnot-meta? prv "rhs-binding-infos (1)")
   (let [tailtab (tailtab kb prv)]
     (as-> (reduce (fn [res rule-id]
                     (let [tail (-> kb :rules rule-id :tail)]
@@ -1228,7 +1311,8 @@
                                    (rule-product kb rule-id (rule-id tailtab))))))
                   {}
                   (keys tailtab)) ?pset-maps
-      ?pset-maps
+      (reapply-fnot-meta ?pset-maps)
+      (good-fnot-meta? ?pset-maps "rhs-binding-infos (1.1)")
       ;; If the RHSs include an instance that is all ground, the non-ground ones must go.  ToDo: right?
       (reduce-kv (fn [res rule-id psets]
                    (if (some ground? psets)
@@ -1242,10 +1326,11 @@
                      (assoc res rule-id
                             (mapv #(-> {}
                                        (assoc :rhs %)
-                                       (assoc :bindings (uni/unify tail %)))
+                                       (assoc :bindings (unify* tail %)))
                                   psets))))
                  {}
-                 ?pset-maps))))
+                 ?pset-maps)
+      (good-fnot-meta? ?pset-maps "rhs-binding-infos (2)"))))
 
 (def scope-debugging? false)
 (def binding-stack (atom '()))
@@ -1303,7 +1388,7 @@
   [kb prv]
   (->> kb
        :observations
-       (map #(when-let [subs (uni/unify prv %)]
+       (map #(when-let [subs (unify* prv %)]
                (when-not (empty? subs) (merge-bindings! subs :source "OBS"))
                (cond->  {:prvn (uni/subst prv subs)}
                  (not-empty subs) (assoc :bindings subs))))
@@ -1322,7 +1407,7 @@
                        (-> {:id (:id fact)}
                            (assoc :form (-> fact :cnf first lit2form)))))
                [])
-       (map (fn [fact] (when-let [subs (uni/unify prv (:form fact))]
+       (map (fn [fact] (when-let [subs (unify* prv (:form fact))]
                          (when-not (empty? subs) (merge-bindings! subs :source "FACT"))
                          (cond-> (assoc fact :prvn (uni/subst prv subs))
                            (not-empty subs) (assoc :bindings subs))))) ; Bindings need to go into scope, but not here!
@@ -1333,7 +1418,7 @@
   "Find a kb assumption that will unify with form, or create a new one
    and add it to the (:assumptions-used kb) atom."
   [kb form]
-  (if-let [subs (some #(uni/unify form %) (-> kb :assumptions-used deref vals))]
+  (if-let [subs (some #(unify* form %) (-> kb :assumptions-used deref vals))]
     (do (when-not (empty? subs) (merge-bindings! subs :source "ASSUM"))
         {:form form :subs subs})
     (let [name (-> "assume-" (str (swap! (-> kb :vars :assumption-count) inc)) keyword)
@@ -1352,7 +1437,7 @@
   ;{:pre [(= (first prv) (-> rule :head first))]}
   (let [{:keys [head tail]} rule
         lhs (map (fn [l h] (if (cvar? l) h l)) prv head)
-        subs (uni/unify tail (:rhs sol))]
+        subs (unify* tail (:rhs sol))]
     (uni/subst lhs subs)))
 
 (defn consistent-call?
@@ -1364,7 +1449,7 @@
     (let [caller-binds (-> call-info :caller :bindings)
           called-binds (-> call-info :called :bindings)
           ;; {} is a perfect match on ground, not a failure!
-          equiv-var-map (->> (uni/unify (-> call-info :caller :sol) (-> call-info :called :lhs))
+          equiv-var-map (->> (unify* (-> call-info :caller :sol) (-> call-info :called :lhs))
                              (reduce-kv (fn [res k v] (if (cvar? v) (assoc res k v) res)) {}))]
       ;; Bindings must match if both are bound.
       (every? (fn [[caller-var called-var]]
@@ -1392,6 +1477,7 @@
 (defn rule-solve
   "Prove prv using a rule. This is mutually recursive with prove-fact."
   [kb prv caller]
+  (good-fnot-meta? prv "rule-solve")
   (reduce-kv
    (fn [res rule-id sols]
      (let [rule (-> kb :rules rule-id)
@@ -1414,7 +1500,7 @@
                                          (assoc ?r :rhs-queries sol) ; ToDo: Problem here that each component might be...??? (lost it)
                                          (assoc ?r :decomp
                                                 (doall (mapv (fn [prv]
-                                                               (log/info "rule-solve: prv=" prv "meta =" (meta prv))
+                                                               ;(log/info "rule-solve: prv=" prv "meta =" (meta prv))
                                                                (let [prv (progressive-bind prv (top-scope))]
                                                                  (merge-bindings! (merge (:bindings sol) (:bindings caller)) :source prv)
                                                                  (prove-fact kb {:prv prv ; top-scope is thereby progressively updated..., I think!
@@ -1426,8 +1512,8 @@
                        rule-result))
                    real-sols)))))
    []
-   ;; These are 'proof-vecs steps' with binding information.
-   (rhs-binding-infos kb prv)))
+    ;; These are 'proof-vecs steps' with binding information.
+    (rhs-binding-infos kb prv)))
 
 (defn prove-fact
   "Used in creating a raw proof, this recursively develop (this is mutually recursive with rule-solve) a tree that
@@ -1435,16 +1521,17 @@
    Where suitable rules, observations, and facts aren't found, this adds assumptions."
   [kb {:keys [prv caller] :as proof}]
   (dbg-scope "PROOF FOR" prv "caller=" caller)
-  (log/info "prv=" prv)
-  (let [proof (assoc proof :proofs [])
+  (let [prv (reapply-fnot-meta prv)
+        proof (assoc proof :proofs [])
         heads (->> kb :rules vals (map :head))
         bound (atom nil)]
+    (good-fnot-meta? prv "prove-fact")
     (cond (reset! bound (observation-solve? kb prv))       (update proof :proofs into (map #(assoc % :observation-used? true) @bound)),
           (reset! bound (fact-solve? kb prv))              (update proof :proofs into (map #(-> %
                                                                                                 (assoc :fact-used? true)
                                                                                                 (assoc :fact-id (:id %)))
                                                                                            @bound)),
-          (some (fn [head] (uni/unify head prv)) heads)    (update proof :proofs into (rule-solve kb prv caller))
+          (some (fn [head] (unify* head prv)) heads)    (update proof :proofs into (rule-solve kb prv caller))
           :else                                            (let [{:keys [subs form id]} (add-assumption kb prv)]
                                                              (update proof :proofs conj (-> {:assumption-used? true}
                                                                                             (assoc :assume-id id)
@@ -1460,7 +1547,7 @@
                      bindings
                      (let [rhs (first rhsides)]
                        (recur (rest rhsides)
-                              (into bindings (map #(if % (uni/unify (:prv rhs) %) {})
+                              (into bindings (map #(if % (unify* (:prv rhs) %) {})
                                                   (map :prvn (:proofs rhs))))))))]
     (->> raw-maps
          (filter not-empty)
@@ -1691,13 +1778,13 @@
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
       (assoc  ?kb :proof-vecs      (flatten-proofs (:raw-proofs ?kb)))
       (update ?kb :proof-vecs     #(winnow-proofs % observations+ params))
-      (reset! diag ?kb)
       (assoc  ?kb :pclauses        (collect-pclauses ?kb))
       (update ?kb :pclauses       #(into % (inverse-assumptions ?kb)))
       (update ?kb :pclauses       #(into % (inverse-facts ?kb)))
       (update ?kb :pclauses       #(into % (inverse-rules ?kb)))
       (update ?kb :pclauses       #(into % (add-not-head-pclauses ?kb)))
       (assoc  ?kb :pclauses        (reduce-pclauses ?kb))
+      (break-here ?kb)
       (update ?kb :pclauses       #(add-id-to-comments %))
       (run-problem ?kb :loser-fn loser-fn :max-together max-together))))
 

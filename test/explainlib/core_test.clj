@@ -3,6 +3,7 @@
   (:require
    [clojure.core.unify          :as uni]
    [clojure.set                 :as sets]
+   [clojure.spec.alpha           :as s]      ; for debugging.
    [clojure.test                :refer [deftest is testing]]
    [explainlib.core :as explain :refer [defkb explain report-results]]
    [libpython-clj2.require      :refer [require-python]]
@@ -15,6 +16,7 @@
   "Pull out of an executed problem (a kb + execution results) its model and cost (for use in a test)."
   [problem]
   (->> problem :mpe (map #(dissoc % :proof-id)) (sort-by :cost) vec))
+
 
 ;;;================================ Test running the RC2 MAXSAT Python algorithm =============================
 ;;; WDIMACS format http://www.maxhs.org/docs/wdimacs.html N.B. Comments can only be on a line by themselves: #"^c (.*)"
@@ -565,6 +567,32 @@ c This is a comment.  'c' in first column, then a space!
                                       :using "obs-1"},
                                      :subs {?x CostTable}}]})))))
 
+
+(deftest flattening-proofs
+  (testing "Testing that proofs are flattened correctly."
+    (testing "Testing a simple flattening."
+      (let [raw-proof '{:rule-used? true,
+                        :rule-used :rule-1,
+                        :proving (road-is-slow mt-pass),
+                        :rhs-queries {:rhs ((heavy-snow mt-pass) (bad-road-for-snow mt-pass)), :bindings {?loc-r1 mt-pass, ?x mt-pass}},
+                        :decomp
+                        [{:prv (heavy-snow mt-pass),
+                          :caller {:rule-id :rule-1, :sol (heavy-snow mt-pass), :bindings {?loc-r1 mt-pass}},
+                          :proofs [{:id :fact-1, :form (heavy-snow mt-pass), :prvn (heavy-snow mt-pass), :fact-used? true, :fact-id :fact-1}]}
+                         {:prv (bad-road-for-snow mt-pass),
+                          :caller {:rule-id :rule-1, :sol (bad-road-for-snow mt-pass), :bindings {?loc-r1 mt-pass}},
+                          :proofs
+                          [{:id :fact-4,
+                            :form (bad-road-for-snow ?x),
+                            :prvn (bad-road-for-snow mt-pass),
+                            :bindings {?x mt-pass},
+                            :fact-used? true,
+                            :fact-id :fact-4}]}]}]
+        (is (= '[[{:form (road-is-slow mt-pass), :rule? true, :rule-id :rule-1}
+                  {:form (heavy-snow mt-pass), :fact? true, :fact-id :fact-1, :rule-id :rule-1}
+                  {:form (bad-road-for-snow mt-pass), :fact? true, :fact-id :fact-4, :rule-id :rule-1}]]
+               (explain/flatten-proof raw-proof)))))))
+
 (deftest postprocessed-proof-2
   (testing "Testing that abductive logic proofs on a simple example look okay."
     (is (= '{:prv (road-is-slow mt-pass),
@@ -1003,13 +1031,13 @@ c This is a comment.  'c' in first column, then a space!
 (deftest proof-prop-sets
   (testing "that proof-prop-sets are constructed correctly"
     (is (=  (-> "data/testing/proofs/whole-results.edn" slurp read-string)
-            (->> (explain/walk-rules (-> "data/testing/proofs/whole-proof.edn" slurp read-string explain/varize)) (mapv #(mapv :step %)))))
+            (->> (explain/flatten-proofs (-> "data/testing/proofs/whole-proof.edn" slurp read-string explain/varize)) (mapv #(mapv :step %)))))
     (is (= '[[(top-level 1 2 3) (second-level foo) (b 0)] [(top-level 1 2 3) (second-level foo) (third-level bar) (fourth-level baz) (d 1) (e 2) (f 3)]]
-           (->> (explain/walk-rules small) (mapv #(mapv :step %)))))
+           (->> (explain/flatten-proofs small) (mapv #(mapv :step %)))))
     (is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]
-             (->> (explain/walk-rules tiny) (mapv #(mapv :step %)))))
+             (->> (explain/flatten-proofs tiny) (mapv #(mapv :step %)))))
     (is (= '[[(top-level a-1 b-1 c-1) (a a-1) (b b-1) (c c-1)]]
-           (->> (explain/walk-rules tiny-) (mapv #(mapv :step %)))))))
+           (->> (explain/flatten-proofs tiny-) (mapv #(mapv :step %)))))))
 
 ;;;-------------- Medium-sized experiments of complete MPE functionality --------
 (defn interesting-loser-fn

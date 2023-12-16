@@ -6,7 +6,7 @@
    [clojure.spec.alpha :as s]
    [clojure.tools.namespace.repl :as tools-ns :refer [disable-reload! refresh clear set-refresh-dirs]]
    [expound.alpha :as expound]
-   [explainlib.core :refer [explainlib]]   ; for mount
+   [explainlib.maxsat :refer [maxsat-python]]   ; for mount
    [mount.core :as mount]
    [lambdaisland.classpath.watch-deps :as watch-deps]      ;; hot loading for deps
    [taoensso.timbre :as log]))

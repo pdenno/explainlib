@@ -6,6 +6,7 @@
    [clojure.spec.alpha           :as s]      ; for debugging.
    [clojure.test                :refer [deftest is testing]]
    [explainlib.core :as explain :refer [defkb explain report-results]]
+   [explainlib.specs            :as specs] ; for debugging
    [libpython-clj2.require      :refer [require-python]]
    [taoensso.timbre             :as log]))
 

@@ -1,5 +1,9 @@
 (ns explainlib.util
   (:require
+   [clojure.core.unify           :as uni]
+   [clojure.spec.alpha           :as s]
+   [clojure.walk                 :as walk]
+   [explainlib.specs             :as specs]
    [mount.core                   :refer [defstate]]
    [taoensso.timbre              :as log]))
 
@@ -48,6 +52,24 @@
      (apply str (:vargs data)) ; So it can do simple indented call tracing.
      (taoensso.timbre/default-output-fn opts (dissoc data :hostname_ :timestamp_)))))
 
+(defn fact-not?
+  "Return the rest of the proposition (the part without the not) the fact is a factual-not."
+  [fact]
+  (when (and (seq? fact) (-> fact meta :factual-not?))
+    (rest fact)))
+
+(defn unify*
+  "uni/unify but with additional provisions when :fact/not."
+  [x y]
+  (s/assert :specs/proposition x) ; ToDo: only propositions here, right?
+  (s/assert :specs/proposition y)
+  (let [x* (if (fact-not? x) (rest x) x)
+        y* (if (fact-not? y) (rest y) y)]
+    (when (or (= :fact/not (first x*)) (= :fact/not (first y*))) ; ToDo: This check is just for development?
+      (log/error ":fact/not without proper metadata: x =" x "y =" y)
+      (throw (ex-info ":fact/not without proper metadata:" {:x x :y y})))
+    (uni/unify x* y*)))
+
 (defn config-log
   "Configure Timbre: set reporting levels and specify a custom :output-fn.
    Return the log/*config*."
@@ -60,6 +82,33 @@
                             [#{"*"} :error]])))
     (log/error "Invalid timbre reporting level:" min-level))
   log/*config*)
+
+(defn varize
+  "Respectively, add :cvar? and :factual-not? metadata to variables and :fact/not predicates of obj."
+  ([obj] (varize obj ""))
+  ([obj suffix]
+   (letfn [(vize [obj]
+             (cond (and (list? obj) (= (first obj) ':fact/not))       (with-meta (conj (map vize (rest obj)) :fact/not) {:factual-not? true}),
+                   (and (symbol? obj) (= \? (-> obj name first)))     (with-meta (-> obj name (str suffix) symbol) {:cvar? true})
+                   (list? obj)                                        (map vize obj)
+                   (vector? obj)                                      (mapv vize obj)
+                   (map? obj)                                         (reduce-kv (fn [m k v] (assoc m (vize k) (vize v))) {} obj)
+                   :else                                              obj))]
+     (vize obj))))
+
+(defn cvar? [x] (-> x meta :cvar?))
+
+(defn collect-vars
+  "Return a set of all the vars in a argument form"
+  [obj]
+  (let [accum (atom #{})]
+    (walk/postwalk (fn [x] (when (cvar? x) (swap! accum conj x))) obj)
+    @accum))
+
+(defn ground?
+  [form]
+  (and (seq? form)
+       (empty? (collect-vars form))))
 
 (defstate util
   :start (config-log :info))

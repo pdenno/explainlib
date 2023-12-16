@@ -9,11 +9,13 @@
    [libpython-clj2.python        :as py :refer [py.]]
    [mount.core                   :refer [defstate]]
    [explainlib.specs             :as specs]
-   [explainlib.util              :as util :refer [unify* varize collect-vars]]
+   [explainlib.util              :as util :refer [unify* varize collect-vars fact-not?]]
    [taoensso.timbre              :as log]))
 
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
+
+;;; ToDo: Make sure :neg? is only used to set polarity in rule clauses. Use :fact/not otherwise.
 
 (def diag (atom nil))
 (def default-max-clause-probability      "Any clause probability larger than this value gets this value and a warning."     0.999999)
@@ -29,13 +31,17 @@
 
 (defn form2lit
   "Return a literal. It looks like {:pred (some form) :neg? true|false}.
-   Handles only predicates and negated predicates."
+   When argument form has {:factual-not? true} so will the :pred.
+   :neg? is always returned false."
   [form]
   (s/assert ::specs/proposition form)
   (let [form (varize form)]  ; BTW varize preserves fnot meta.
-    (if (-> form meta :factual-not?)
-      {:pred form :neg? false} ; factual-not polarity untouched. (See definition of factual-not above.)
-      {:pred form :neg? false})))
+    {:pred form :neg? false}))
+
+(defn complement-lit
+  "Complement the argument literal."
+  [lit]
+  (update lit :neg? not))
 
 (defn opposite-lits?
   "Return true if the two literals are complements."
@@ -74,6 +80,7 @@
           requires-evidence?                (do (log/warn "using requires-evidence? for pre-dsym" pred-sym)   0.01)
           :else                             (do (log/warn "Using default assume-prob for" pred-sym)           (-> kb :params :default-assume-prob)))))
 
+
 (defn pclause-for-non-rule
   "Return a pclause for non-rule proof-vec step, except when it is a negated fact, then return nil.
    This can be a bit confusing: negated predicates in a step are part of an explanation; they need their own pclauses.
@@ -88,7 +95,7 @@
                                               (assoc :remove? true)
                                               (assoc :prob 1.0)
                                               (assoc :comment (cl-format nil "OB ~A" (:form step))))
-            (:fact? step)                 (if-let [fact (some #(when (unify* ground-atom (-> % :cnf first :pred)) %) facts)]
+            (:fact? step)                 (if-let [fact (some #(when (unify* ground-atom (:form %)) %) facts)] ; 2023rf Second arg to unify* was (-> % :cnf first :pred)
                                             (-> fact
                                                 (assoc :fact? true)
                                                 (assoc :from (:id fact))
@@ -102,8 +109,15 @@
                                               (assoc ?a :id (-> "assume-" (str (-> kb :vars :assumption-count deref)) keyword))
                                               (assoc ?a :from (:id ?a)) ; :id is going to defined using :from
                                               (assoc ?a :prob (assumption-prob (first ground-atom) kb))
+                                              (assoc ?a :form ground-atom) ; 2023rf added. Might not be necessary, but looks useful.
                                               (assoc ?a :cnf (vector {:pred ground-atom :neg? false}))
                                               (assoc ?a :comment (cl-format nil "~A" ground-atom)))))))
+
+(defn rule2cnf ; This ought to be called rule2horn!
+  "Return the CNF corresponding to the rule, a vector of literal MAPS."
+  [rule]
+  (into (vector (form2lit (:head rule)))
+        (mapv #(-> % form2lit complement-lit) (:tail rule))))
 
 (defn pclauses-for-rule
   "Return
@@ -125,6 +139,7 @@
                          {}
                          (map #(vector %1 %2) rule-preds ground-atoms))
         rule-pclause (-> rule
+                         (assoc :cnf (rule2cnf rule)) ; 2023rf
                          (dissoc :head :tail :id)
                          (assoc :rule? true)
                          (assoc :using-proof proof-id)
@@ -267,7 +282,9 @@
   (update pclause :cnf
           (fn [cnf]
             (mapv (fn [lit]
-                    (let [id (get prop-ids (:pred lit))]
+                    (let [lit (util/reapply-fnot-meta lit)
+                          id (or (get prop-ids (:pred lit))
+                                 (get prop-ids (-> lit :pred fact-not?)))]
                       (if id
                         (assoc lit :pos id)
                         (throw (ex-info "Literal from pclause CNF not in prop-ids:"
@@ -286,7 +303,6 @@
     (when-let [bad (some #(when-not (normal? %) %) (map rest fnots))]
       (log/warn "Factual not predicate" bad "does not have a corresponding positive predicate."))
     (zipmap (sort-by first normal?) (range 1 (-> normal? count inc)))))
-
 
 (defn inverse-assumptions
   "Return a vector inverses of the assumptions used."
@@ -326,17 +342,19 @@
 
 (defn fact-probability
   "Unify the argument form with the facts and return the probability.
-   Truthy is merge of kb :facts :rules and :assumptions."
-  [form facts]
-  (let [unifies-with (reduce (fn [res f]
-                               (if (unify* form (-> f :cnf first :pred))
-                                 (conj res (:id f))
+   truthy is merge of kb :facts :rules and :assumptions."
+  [form truthy]
+  (let [unifies-with (reduce (fn [res tr]
+                               (if (unify* form (:form tr)) ; 2023rf second arg to unify was (-> f :cnf first :pred) AGAIN!
+                                 (conj res (:id tr))
                                  res))
                              []
-                             (vals facts))]
+                             (vals truthy))]
     (if (== 1 (count unifies-with))
-      (-> (get facts (first unifies-with)) :prob)
-      (log/warn "Not exactly one  unifier for" form "unifiers:" unifies-with)))) ; ToDo: Fix this.
+      (if-let [prob (-> (get truthy (first unifies-with)) :prob)]
+        prob
+        (throw (ex-info "No probability for unified form:" {:form form :truthy truthy})))
+      (throw (ex-info "Not exactly one unifier:" {:unifies-with unifies-with :form form :truthy truthy})))))
 
 (defn prop-id2prob
   "Return a map from prop-id integers to probabilities for facts and rules used in a proof.
@@ -344,11 +362,19 @@
    This is computed for each proof-id because the proofs get to the propositions in the prop-ids through different rules.
    Where a proposition isn't used by the proof (it is a fact and) it is unified with a KB fact."
   [{:keys [proof-vecs prop-ids rules facts assumptions z-vars]} proof-id]
+  (reset! diag rules)
   (letfn [(get-prob [step]
              (cond (:rule? step)       (-> (get rules (:rule-id step)) :prob)
                    (:fact? step)       (-> (get facts (:fact-id step)) :prob)
                    (:assumption? step) (-> (get assumptions (:assume-id step)) :prob)))]
-    (let [truthy (-> facts (merge assumptions) (merge rules))
+    (let [truthy (-> facts
+                     (merge assumptions)
+                     (merge (reduce-kv (fn [m k v]
+                                         (assoc m k (-> {}
+                                                        (assoc :id   (:id v))
+                                                        (assoc :form (:head v))
+                                                        (assoc :prob (:prob v)))))
+                                       {} rules)))  ; 2023rf was (merge rules)
           prop-ids-inv (sets/map-invert prop-ids)
           steps  (-> proof-vecs proof-id :steps)
           z-vars+ (into z-vars (map #(- %) z-vars))
@@ -359,13 +385,14 @@
         (merge ?r (reduce (fn [res step]
                             (let [prob (get-prob step)
                                   form (:form step)
-                                  pid (get prop-ids form)]
+                                  pid (or (get prop-ids form)
+                                          (get prop-ids (fact-not? form)))]
                               (-> res
                                   (assoc pid prob)
                                   (assoc (- pid) (- 1.0 prob)))))
                           {}
                          steps))
-           ;; Add in facts not used in the proof.
+        ;; Add in facts not used in the proof.
         (reduce-kv (fn [m k v]
                      (if v
                        (assoc m k v)
@@ -728,10 +755,11 @@
                    game))
     (assoc ?game-kb :prop-ids (make-prop-ids-map ?game-kb))
     (assoc ?game-kb :pclauses
-           (reduce (fn [res pf-id]
-                     (into res (filter #((:used-in %) pf-id)) (:pclauses kb)))
-                   #{} ; A set or you will get one copy for every proof in which the clause is used.
-                   game))
+           (-> (reduce (fn [res pf-id]
+                         (into res (filter #((:used-in %) pf-id)) (:pclauses kb)))
+                       #{} ; A set or you will get one copy for every proof in which the clause is used.
+                       game)
+               util/reapply-fnot-meta))
     (update ?game-kb :pclauses (fn [pcs] (mapv #(set-pclause-prop-ids
                                                  % (:prop-ids ?game-kb) game)
                                                pcs)))

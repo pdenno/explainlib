@@ -7,6 +7,7 @@
    [clojure.test                :refer [deftest is testing]]
    [explainlib.core :as explain :refer [defkb explain report-results]]
    [explainlib.specs            :as specs] ; for debugging
+   [explainlib.util             :as util :refer [varize]] ; for debugging
    [libpython-clj2.require      :refer [require-python]]
    [taoensso.timbre             :as log]))
 
@@ -195,7 +196,7 @@ c This is a comment.  'c' in first column, then a space!
   :all-individuals? true
   :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
-  :facts [{:prob 0.3 :fact (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
+  :facts [{:prob 0.3 :form (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
 
 ;;;   C |  P(C)                       C    D   |  P(D|C)                       Probabilities of the individuals
 ;;;  ---+------                      ----------+----------                          ------
@@ -260,8 +261,8 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.1
            :head  (alarm ?loc)
            :tail  [(not (burglary ?loc)) (earthquake ?loc)]}]
-  :facts [{:prob 0.7 :fact (burglary ?loc)}
-          {:prob 0.2 :fact (earthquake ?loc)}])
+  :facts [{:prob 0.7 :form (burglary ?loc)}
+          {:prob 0.2 :form (earthquake ?loc)}])
 
 ;;; p wcnf 2 8 603
 ;;; 603      1    2    0
@@ -303,8 +304,8 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.01
            :head  (alarm ?loc)
            :tail  [(not (burglary ?loc)) (not (earthquake ?loc))]}]
-  :facts [{:prob 0.7 :fact (burglary ?loc)}
-          {:prob 0.2 :fact (earthquake ?loc)}])
+  :facts [{:prob 0.7 :form (burglary ?loc)}
+          {:prob 0.2 :form (earthquake ?loc)}])
 
 ;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
 (defkb road-is-slow-even-kb
@@ -315,10 +316,10 @@ c This is a comment.  'c' in first column, then a space!
            {:prob 0.5
             :head (road-is-slow ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow mt-pass)}
-          {:prob 0.2 :fact (bad-road-for-snow ?x)}
-          {:prob 0.2 :fact (accident ?x)}
-          {:prob 0.2 :fact (clearing-wreck ?x ?y)}])
+  :facts [{:prob 0.2 :form (heavy-snow mt-pass)}
+          {:prob 0.2 :form (bad-road-for-snow ?x)}
+          {:prob 0.2 :form (accident ?x)}
+          {:prob 0.2 :form (clearing-wreck ?x ?y)}])
 
 (defkb road-is-slow-kb
   "The blocked road KB. From a ProbLog example, I think."
@@ -329,10 +330,10 @@ c This is a comment.  'c' in first column, then a space!
            {:prob 0.5
             :head (road-is-slow ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow mt-pass)}
-          {:prob 0.2 :fact (bad-road-for-snow ?x)}
-          {:prob 0.2 :fact (accident ?x)}
-          {:prob 0.2 :fact (clearing-wreck ?x ?y)}])
+  :facts [{:prob 0.2 :form (heavy-snow mt-pass)}
+          {:prob 0.2 :form (bad-road-for-snow ?x)}
+          {:prob 0.2 :form (accident ?x)}
+          {:prob 0.2 :form (clearing-wreck ?x ?y)}])
 
 (defkb road-is-slow-assumption-kb
   "blocked road with (clearing-wreck $crew-r2-skolem-1 mt-pass) (default assumption prob is 0.10) thus heavy-snow should be favored."
@@ -342,9 +343,9 @@ c This is a comment.  'c' in first column, then a space!
            {:prob 0.5
             :head (road-is-slow ?loc)
             :tail [(accident ?loc) (clearing-wreck ?crew ?loc)]}]
-  :facts [{:prob 0.2 :fact (heavy-snow mt-pass)}
-          {:prob 0.2 :fact (bad-road-for-snow ?x)}
-          {:prob 0.2 :fact (accident ?x)}]) ; Dropped clearing-wreck.
+  :facts [{:prob 0.2 :form (heavy-snow mt-pass)}
+          {:prob 0.2 :form (bad-road-for-snow ?x)}
+          {:prob 0.2 :form (accident ?x)}]) ; Dropped clearing-wreck.
 
 ;;; (def jjj (explain '(groupby Table-1 COLA COLB) et/job-kb))
 (defkb job-kb
@@ -354,7 +355,7 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.05 :head (productDesc ?tab ?x)       :tail [(date ?tab ?x)]}
           {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col1 ?col2)]}
           {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col2 ?col1)]}]
-  :facts [{:prob 0.01 :fact (jobID ?tab ?x ?x)}]
+  :facts [{:prob 0.01 :form (jobID ?tab ?x ?x)}]
   :observations [(date Table-1 COLA)
                  (productDesc Table-1 COLB)])
 
@@ -365,9 +366,9 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.05 :head (productDesc ?tab ?x)       :tail [(date ?tab ?x)]}
           {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col1 ?col2)]}
           {:prob 0.40 :head (groupby ?tab ?col1  ?col2) :tail [(concatKey  ?tab ?col2 ?col1)]}]
-  :facts [{:prob 0.01 :fact (jobID ?tab ?x ?x)}
-          {:prob 0.90 :fact (date Table-1 COLA)}
-          {:prob 0.90 :fact (productDesc Table-1 COLB)}])
+  :facts [{:prob 0.01 :form (jobID ?tab ?x ?x)}
+          {:prob 0.90 :form (date Table-1 COLA)}
+          {:prob 0.90 :form (productDesc Table-1 COLB)}])
 
 ;;; Follow the lead from alarm-kb. The result is a set of CPTs.
 ;;; Following ProbLog semantics, the lack of a rule means the corresponding entry
@@ -389,7 +390,7 @@ c This is a comment.  'c' in first column, then a space!
   "This is a KB for 'inferring concepts' from my thesis."
   :rules [{:prob 0.60 :head (objectiveFnVal ?x) :tail [(designVar ?x)                               (contributesToObj ?x)]}
           {:prob 0.60 :head (objectiveFnVal ?y) :tail [(optLocalVar ?y) (designVar ?x) (func ?x ?y) (contributesToObj ?y)]}]
-  :facts [{:prob 0.10 :fact (func ?x ?x)}]
+  :facts [{:prob 0.10 :form (func ?x ?x)}]
   :observations [(optLocalVar ActualEffort)
                  (designVar TeamsOnLine)
                  (func TeamsOnLine ActualEffort)
@@ -443,24 +444,22 @@ c This is a comment.  'c' in first column, then a space!
            :tail [(failing-sensor ?robot ?joint)
                   (bad-sensor-processing ?robot)]}]
   ;; Distilled from controller info, process knowledge, and a simulation:
-  :facts [{:prob 0.9 :fact (stressed robot-8 joint-2)}
-          {:prob 0.8 :fact (backlash-sim robot-8 joint-2)}
-          {:prob 0.1 :fact (failing-sensor robot-8 joint-2)}
-          {:prob 0.7 :fact (bad-sensor-processing robot-8)}])
+  :facts [{:prob 0.9 :form (stressed robot-8 joint-2)}
+          {:prob 0.8 :form (backlash-sim robot-8 joint-2)}
+          {:prob 0.1 :form (failing-sensor robot-8 joint-2)}
+          {:prob 0.7 :form (bad-sensor-processing robot-8)}])
 
 ;;;------ Tests for the above KBs ----------------------------
 ;;;  For more information about these, use, for example, (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) ex/report-results)
 (deftest good-simple-cases
   (testing "That MPE is getting good results."
-    (testing "Example from Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"
+    (testing "Testing an example from the Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"
       #_(is (= {:proof-1 0.51, :proof-2 0.91}
              (-> '(dee foo) (explain park-kb) :mpe :summary))))
 
-    #_(testing "ToDo: describe"
-        #_(is (= #{{:model [  1  -2] :cost    80}
-                   {:model [  1   2] :cost   208}
-                   {:model [ -1   2] :cost   511}}
-                 (-> '(alarm plaza) (explain alarm-kb) :mpe :summary))))
+    (testing "Tesing the alarm-kb, which has nots in its rules."
+      (is (= {:proof-1 0.504, :proof-2 0.44799999999999995, :proof-3 0.055999999999999994}
+             (-> '(alarm plaza) (explain alarm-kb) :mpe :summary))))
 
     (testing "Testing that where there are no difference in fact and rule probability, proofs are equi-probable."
       (is (= {:proof-1 0.020800000000000003, :proof-2 0.020800000000000003}
@@ -500,9 +499,9 @@ c This is a comment.  'c' in first column, then a space!
   :rules [{:prob 0.9
            :head (D ?x)
            :tail [(A ?x) (B ?x)]}]
-  :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.97 :fact (B ?b)}
-          {:prob 0.98 :fact (C ?c)}])
+  :facts [{:prob 0.99 :form (A ?a)}
+          {:prob 0.97 :form (B ?b)}
+          {:prob 0.98 :form (C ?c)}])
 
 (defkb two-rule-kb
   "A simple KB."
@@ -512,9 +511,9 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.9
            :head (D ?y)
            :tail [(A ?y) (C ?y)]}]
-  :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.98 :fact (B ?b)}
-          {:prob 0.97 :fact (C ?c)}])
+  :facts [{:prob 0.99 :form (A ?a)}
+          {:prob 0.98 :form (B ?b)}
+          {:prob 0.97 :form (C ?c)}])
 
 (defkb another-two-rule-kb
   "Another simple KB."
@@ -524,9 +523,9 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.9
            :head (D ?y)
            :tail [(A ?y) (C ?y)]}]
-  :facts [{:prob 0.99 :fact (A ?a)}
-          {:prob 0.97 :fact (B ?b)}
-          {:prob 0.98 :fact (C ?c)}])
+  :facts [{:prob 0.99 :form (A ?a)}
+          {:prob 0.97 :form (B ?b)}
+          {:prob 0.98 :form (C ?c)}])
 
 (deftest simple-fact-probabilities
   (testing "Testing that one rule works. Note antecedent C is not used. Phew!"
@@ -579,19 +578,19 @@ c This is a comment.  'c' in first column, then a space!
                         :decomp
                         [{:prv (heavy-snow mt-pass),
                           :caller {:rule-id :rule-1, :sol (heavy-snow mt-pass), :bindings {?loc-r1 mt-pass}},
-                          :proofs [{:id :fact-1, :form (heavy-snow mt-pass), :prvn (heavy-snow mt-pass), :fact-used? true, :fact-id :fact-1}]}
+                          :proofs [{:id :fact-4, :form (heavy-snow mt-pass), :prvn (heavy-snow mt-pass), :fact-used? true, :fact-id :fact-4}]}
                          {:prv (bad-road-for-snow mt-pass),
                           :caller {:rule-id :rule-1, :sol (bad-road-for-snow mt-pass), :bindings {?loc-r1 mt-pass}},
                           :proofs
-                          [{:id :fact-4,
+                          [{:id :fact-2,
                             :form (bad-road-for-snow ?x),
                             :prvn (bad-road-for-snow mt-pass),
                             :bindings {?x mt-pass},
                             :fact-used? true,
-                            :fact-id :fact-4}]}]}]
+                            :fact-id :fact-2}]}]}]
         (is (= '[[{:form (road-is-slow mt-pass), :rule? true, :rule-id :rule-1}
-                  {:form (heavy-snow mt-pass), :fact? true, :fact-id :fact-1, :rule-id :rule-1}
-                  {:form (bad-road-for-snow mt-pass), :fact? true, :fact-id :fact-4, :rule-id :rule-1}]]
+                  {:form (heavy-snow mt-pass), :fact? true, :fact-id :fact-4, :rule-id :rule-1}
+                  {:form (bad-road-for-snow mt-pass), :fact? true, :fact-id :fact-2, :rule-id :rule-1}]]
                (explain/flatten-proof raw-proof)))))))
 
 (deftest postprocessed-proof-2
@@ -764,7 +763,7 @@ c This is a comment.  'c' in first column, then a space!
           {:prob 0.80 :head (ta/conceptVar   ?type  ?x)      :tail [(ta/isType ?type) (ta/simMatchVar ?x ?type)]}
           ;; not-inv? not useful? It is hard to describe. No penalty for not meeting it???
           ]
-  :facts [{:prob 0.001 :fact (py/traceVar ?x ?x)}] ;
+  :facts [{:prob 0.001 :form (py/traceVar ?x ?x)}] ;
   :observations [(ta/isType ta/DemandType)
                  (ta/isType ta/WorkerType)])
 
@@ -784,9 +783,9 @@ c This is a comment.  'c' in first column, then a space!
   :rules [{:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-1 ?x) (p-2 ?y) (p-3 ?x ?z) (p-4 ?y ?z)]}
           {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption.
           {:prob 0.01 :head (p-foo ?x)     :tail [(p-1 ?x)]}]
-  :facts  [{:prob 0.01 :fact (p-1 x-3)}
-           {:prob 0.01 :fact (p-3 x-1 ?x)}
-           {:prob 0.01 :fact (p-5 ?x ?x)}]
+  :facts  [{:prob 0.01 :form (p-1 x-3)}
+           {:prob 0.01 :form (p-3 x-1 ?x)}
+           {:prob 0.01 :form (p-5 ?x ?x)}]
   :observations [(p-1 x-1)
                  (p-1 x-2)
                  (p-1 x-bogo)
@@ -806,14 +805,14 @@ c This is a comment.  'c' in first column, then a space!
                  (p-4 y-1 z-bogo)])
 
 (def data-from-datatab-p-3
-  (explain/varize (set '[(p-3 x-1 z-1)
+  (varize (set '[(p-3 x-1 z-1)
                          (p-3 x-1 z-2)
                          (p-3 x-bogo z-1)
                          (p-3 x-1 z-bogo)
                          (p-3 x-1 ?x-f2)]))) ; From a fact; not what is wanted.
 
 (def corrected-data-from-datatab-p-3
-  (explain/varize (set '[(p-3 x-1 z-1)
+  (varize (set '[(p-3 x-1 z-1)
                          (p-3 x-1 z-2)
                          (p-3 x-bogo z-1)
                          (p-3 x-1 z-bogo)
@@ -906,8 +905,8 @@ c This is a comment.  'c' in first column, then a space!
 ;;; 2021-04-27 Commented out because explain/get-assumption doesn't seem to exist anymore.
 #_(deftest assumptions-are-memoized
   (testing "that you get the same assumption when you call for something similar twice."
-    (is (= (explain/get-assumption proof-test-kb-1 (explain/varize '(foo ?x)))
-           (explain/get-assumption proof-test-kb-1 (explain/varize '(foo ?x)))))))
+    (is (= (explain/get-assumption proof-test-kb-1 (varize '(foo ?x)))
+           (explain/get-assumption proof-test-kb-1 (varize '(foo ?x)))))))
 
 ;;;=============================================================================================================
 (defkb rule-product-kb ; ToDo: Write a test that uses this KB.
@@ -915,9 +914,9 @@ c This is a comment.  'c' in first column, then a space!
   :rules [{:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-1 ?x) (p-2 ?y) (p-3 ?x ?z) (p-4 ?y ?z)]}
           {:prob 0.90 :head (p-lhs ?x ?y)  :tail [(p-other ?x ?y)]} ; This generates an assumption.
           {:prob 0.01 :head (p-foo ?x)     :tail [(p-1 ?x)]}]
-  :facts  [{:prob 0.01 :fact (p-1 x-3)}
-           {:prob 0.01 :fact (p-3 x-1 ?x)} ;<==================== Is this getting used? Should it be?
-           {:prob 0.01 :fact (p-5 ?x ?x)}]
+  :facts  [{:prob 0.01 :form (p-1 x-3)}
+           {:prob 0.01 :form (p-3 x-1 ?x)} ;<==================== Is this getting used? Should it be?
+           {:prob 0.01 :form (p-5 ?x ?x)}]
   :observations [(p-1 x-1)
                  (p-1 x-2)
                  (p-1 x-bogo)
@@ -938,7 +937,7 @@ c This is a comment.  'c' in first column, then a space!
 
 ;;;====================== proof-prop-sets testing ==========================================
 (def whole
-  (explain/varize
+  (varize
    '[{:rule-used? true,
       :rule-used :rule-1,
       :proving (ta/conceptQuery demand),
@@ -976,7 +975,7 @@ c This is a comment.  'c' in first column, then a space!
                 :proofs [{:prvn (ta/simMatchExcelSheet demand ta/DemandType), :fact-used? true}]}]}]}]}]}]}]))
 
 (def small
-  (explain/varize
+  (varize
    '[{:rule-used? true,
       :rule-used :rule-1,
       :proving (top-level 1 2 3)
@@ -1005,7 +1004,7 @@ c This is a comment.  'c' in first column, then a space!
 ;;;   "This one isn't used. Don't delete it because the issue with a variable in :proving is not resolved."
 (def tiny
   "This one isn't used. Don't delete it because the issue with a variable in :proving is not resolved."
-  (explain/varize
+  (varize
    '[{:rule-used? true,
       :rule-used :rule-5,
       :proving (top-level ?a b-1 c-1)    ; This is the only example of this sort with a var in :proving.
@@ -1017,7 +1016,7 @@ c This is a comment.  'c' in first column, then a space!
                {:prv (c ?z), :proofs [{:fact-used? true, :prvn (c c-1)}]}]}]))
 
 (def tiny-
-  (explain/varize
+  (varize
    '[{:rule-used? true,
       :rule-used :rule-5,
       :proving (top-level a-1 b-1 c-1)
@@ -1032,7 +1031,7 @@ c This is a comment.  'c' in first column, then a space!
 (deftest proof-prop-sets
   (testing "that proof-prop-sets are constructed correctly"
     (is (=  (-> "data/testing/proofs/whole-results.edn" slurp read-string)
-            (->> (explain/flatten-proofs (-> "data/testing/proofs/whole-proof.edn" slurp read-string explain/varize)) (mapv #(mapv :step %)))))
+            (->> (explain/flatten-proofs (-> "data/testing/proofs/whole-proof.edn" slurp read-string varize)) (mapv #(mapv :step %)))))
     (is (= '[[(top-level 1 2 3) (second-level foo) (b 0)] [(top-level 1 2 3) (second-level foo) (third-level bar) (fourth-level baz) (d 1) (e 2) (f 3)]]
            (->> (explain/flatten-proofs small) (mapv #(mapv :step %)))))
     (is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]

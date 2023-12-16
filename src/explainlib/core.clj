@@ -8,7 +8,7 @@
    [clojure.string]
    [explainlib.maxsat            :as maxsat]
    [explainlib.specs             :as specs]
-   [explainlib.util              :as util :refer [unify* fact-not? varize collect-vars ground? cvar?]]
+   [explainlib.util              :as util :refer [unify* fact-not? varize collect-vars ground? cvar? reapply-fnot-meta]]
    [taoensso.timbre              :as log]))
 
 ;;; ToDo:
@@ -55,7 +55,6 @@
 ;;;                    {:cnf [{:pred (:fact/not pred-sym...) :neg? true}]} is allowed and is the double negative of the base proposition (pred-sym ...).
 ;;;                    Use of :neg? is restricted to pclauses for CNF, not a thing for generation of proofs.
 
-
 (defn good-fnot-meta? ; ToDo: Move to env/dev?
   "Walk through a structure and return it untouched if the the fnot propositions have the necessary metadata."
   ([obj] (good-fnot-meta? obj nil))
@@ -69,26 +68,6 @@
                    (seq? x)                                   (map c4fn x)
                    :else                                       x))]
      (doall (c4fn obj)))))
-
-;;; ToDo: I'm not quite happy with this design. Metadata on proposition other than :factual-not? could be lost.
-;;;       The conundrum is that propositions are simple objects and I'd like to keep them this way.
-;;;       Of course, I could search out all the places this is used and store the metadata before the new object is created.
-;;;       There are currently 4 places where this is needed.
-(defn reapply-fnot-meta
-  "meta on fnot propositions is lost when new propositions are made from old ones. This adds it back."
-  [obj]
-  (letfn [(mb [x]
-             (cond (map? x)                                  (reduce-kv (fn [m k v] (assoc m (mb k) (mb v))) {} x)
-                   (vector? x)                               (mapv mb x)
-                   (and (seq? x) (= :fact/not (first x)))    (with-meta x (assoc (meta x) :factual-not? true))
-                   (seq? x)                                  (map mb x)
-                   :else                                      x))]
-    (mb obj)))
-
-(defn complement-lit
-  "Complement the argument literal."
-  [lit]
-  (update lit :neg? not))
 
 ;;; ToDo: Make this go away here. Should only be used in maxsat.clj
 (defn form2lit
@@ -119,12 +98,6 @@
      (with-meta (list :fact/not (:pred lit)) {:factual-not? true})
      (:pred lit))))
 
-;;; ToDo: This goes away.
-(defn rule2cnf ; This ought to be called rule2horn!
-  "Return the CNF corresponding to the rule, a vector of literal MAPS."
-  [rule]
-  (into (vector (form2lit (:head rule)))
-        (mapv #(-> % form2lit complement-lit) (:tail rule))))
 
 (defn skol-var
   "'Skolemize' the argument variable."
@@ -183,12 +156,12 @@
                                 (assoc  ?r :id   k)
                                 (update ?r :head #(varize % suffix))
                                 (update ?r :tail #(varize % suffix))
-                                (assoc  ?r :cnf   (rule2cnf ?r)))]
+                                #_(assoc  ?r :cnf   (rule2cnf ?r)))]
                      (s/valid? ::specs/rule rule)
                      (assoc rs (:id rule) rule)))
                  {}
                  (zipmap (map #(-> (str "rule-" %) keyword) (range 1 (-> rules count inc)))
-                         rules))
+                         rules)) ; ToDo: Can we sort rules? See warn-rule-rhs-ordering.
       warn-rule-rhs-ordering))
 
 (defn finalize-facts
@@ -199,15 +172,15 @@
                (let [suffix   (name2suffix k)
                      fact (-> v
                               (assoc  :id  k)
-                              (assoc  :cnf (-> v :fact form2lit vector))
-                              (update :cnf #(varize % suffix))
-                              (dissoc :fact))]
+                              #_(assoc  :cnf (-> v :fact form2lit vector))
+                              #_(update :cnf #(varize % suffix))
+                              #_(dissoc :fact))]
                  (s/valid? ::specs/fact fact)
                  (-> fs
                      (assoc k fact))))
              {}
              (zipmap (map #(-> (str "fact-" %) keyword) (range 1 (-> facts count inc)))
-                     facts)))
+                     (sort-by #(-> % :form first name) facts))))
 
 (defn finalize-kb [kb query]
   (as-> kb ?kb
@@ -238,8 +211,8 @@
     (doseq [rule rules]
       (doseq [rhs-elem (:tail rule)]
         (when-let [parent (-> rhs-elem meta :parent-fact)]
-          (if-let [fmap (some #(when (unify* parent (:fact %)) %) facts)]
-            (swap! fact-atm conj {:prob (- 1.0 (:prob fmap)) :fact rhs-elem})
+          (if-let [fmap (some #(when (unify* parent (:form %)) %) facts)] ; 2023rf :form was :fact
+            (swap! fact-atm conj {:prob (- 1.0 (:prob fmap)) :form rhs-elem}) ; 2023rf :form was :fact
             (log/warn "Factual not (not in RHS of a rule) without corresponding fact:" rhs-elem)))))
     ;; ToDo: Would be nice were they to keep the order in they originally had.
     (-> fact-atm deref vec)))
@@ -287,7 +260,7 @@
                                          :elimination-priority       '~elimination-priority
                                          :eliminate-by-assumptions   '~eliminate-by-assumptions}
                                 :rules '~rw-rules
-                                :facts '~(add-facts-for-factual-nots facts rw-rules)
+                                :facts '~facts  ; '~(add-facts-for-factual-nots facts rw-rules) 2023rf
                                 :assumptions-used (atom {})
                                 :observations '~observations}))))))
 
@@ -304,7 +277,7 @@
   (reset! (:assumptions-used kb) {})
   (reset! (-> kb :vars :assumption-count) 0)
   (reset! (-> kb :vars :num-skolems) 0)
-  (dissoc kb :raw-proofs :cnf-proofs :pclauses))
+  (dissoc kb :raw-proofs :pclauses))
 
 (defn pick-key [form]
   (cond (:rule-used? form) :rule?
@@ -401,10 +374,11 @@
                  (reduce-kv (fn [res proof-id pvec-map]
                               (assoc res proof-id
                                      (assoc pvec-map :pvec-props
-                                            (-> (remove (fn [pred] (some #(= pred %) observations+))
-                                                        (->> pvec-map :steps (map :form)))
-                                                distinct
-                                                vec))))
+                                            (->> (remove (fn [pred] (some #(= pred %) observations+))
+                                                         (->> pvec-map :steps (map :form)))
+                                                 (map #(or (fact-not? %) %))
+                                                 distinct
+                                                 vec))))
                             {} ?pvecs))]
     (when (empty? result)
       (throw (ex-info "No proof vecs remaining." {})))
@@ -660,12 +634,6 @@
   (->> kb
        :facts
        vals
-       (reduce (fn [res fact]
-                 ;(log/info "fact=" fact "pred meta:" (-> fact :cnf first :pred meta))
-                 (conj res
-                       (-> {:id (:id fact)}
-                           (assoc :form (-> fact :cnf first lit2form)))))
-               [])
        (map (fn [fact] (when-let [subs (unify* prv (:form fact))]
                          (when-not (empty? subs) (merge-bindings! subs :source "FACT"))
                          (cond-> (assoc fact :prvn (uni/subst prv subs))
@@ -844,7 +812,7 @@
   [kb]
   (let [data (-> []
                  (into (:observations kb))
-                 (into (->> kb :facts vals (map #(-> % :cnf first :pred)))))]
+                 (into (->> kb :facts vals (map #(:form %)))))] ; 2023rf #(-> % :cnf first :pred)))))]
     (group-by first data)))
 
 ;;;======================================= Toplevel =========================================
@@ -869,6 +837,7 @@
       (update ?kb :pclauses       #(into % (maxsat/add-not-head-pclauses ?kb)))
       (assoc  ?kb :pclauses        (maxsat/reduce-pclauses ?kb))
       (update ?kb :pclauses       #(maxsat/add-id-to-comments %))
+      ;(break-here ?kb)
       (maxsat/run-problem ?kb :loser-fn loser-fn :max-together max-together))))
 
 ;;;======================================= Reporting ====================================
@@ -930,10 +899,10 @@
                (:prob rule) (:id rule) (:head rule) (:tail rule)))
   (doseq [fact (->> kb :facts vals (sort-by #(name2num (:id %))))]
     (cl-format stream "~%~5,3f ~9A :: ~A"
-               (:prob fact) (:id fact) (-> fact :cnf first lit2form)))
+               (:prob fact) (:id fact) (:form fact))) ; 2023rf (-> fact :cnf first lit2form)
   (doseq [assum (->>  kb :pclauses (filter :assumption?))]
     (cl-format stream "~%~5,3f ~9A :: ~A"
-               (:prob assum) (:id assum) (-> assum :cnf first lit2form)))
+               (:prob assum) (:id assum) (:form assum))) ; 2023 rf (-> assum :cnf first lit2form)))
   (cl-format *out* "~{~%~A~}" (:observations kb))
   true)
 

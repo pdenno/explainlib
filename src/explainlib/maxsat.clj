@@ -15,10 +15,22 @@
 (require-python '[pysat.examples.rc2 :as rc2])
 (require-python '[pysat.formula :as wcnf])
 
-;;; ToDo: Make sure :neg? is only used to set polarity in rule clauses. Use :fact/not otherwise.
+;;; ToDo:
+;;;   - Make sure :neg? is only used to set polarity in rule clauses. Use :fact/not otherwise.
+;;;   - hunt down where factual-nots done't have proper metadata and eliminate use of reapply-fnot-meta.
 
 (def diag (atom nil))
-(def default-max-clause-probability      "Any clause probability larger than this value gets this value and a warning."     0.999999)
+(def default-max-clause-probability  "Any clause probability larger than this value gets this value and a warning."  0.999999)
+
+;;; ToDo: Of course, an objective is to eliminate this!
+(defn really!
+  "After saturating the code with doall around :form and getting nowhere, I try this."
+  [obj]
+  (if (= (type obj) clojure.lang.LazySeq)
+    (let [res (cl-format nil "~A" (doall obj))]
+      ;(log/info "Really!:" obj "returning res = " res)
+      res)
+    obj))
 
 (defn lit2form
   "Return the literal list form for the argument literal map.
@@ -30,6 +42,14 @@
       pred)))
 
 (defn form2lit
+  "Return a literal. It looks like {:pred (some form) :neg? true|false}."
+  [form]
+  (s/assert ::specs/proposition form)
+  (if-let [base-form (util/fact-not? form)]
+    {:pred base-form :neg? true}
+    {:pred form :neg? false}))
+
+#_(defn form2lit
   "Return a literal. It looks like {:pred (some form) :neg? true|false}.
    When argument form has {:factual-not? true} so will the :pred.
    :neg? is always returned false."
@@ -95,11 +115,11 @@
                                               (assoc :remove? true)
                                               (assoc :prob 1.0)
                                               (assoc :comment (cl-format nil "OB ~A" (:form step))))
-            (:fact? step)                 (if-let [fact (some #(when (unify* ground-atom (:form %)) %) facts)] ; 2023rf Second arg to unify* was (-> % :cnf first :pred)
+            (:fact? step)                 (if-let [fact (some #(when (unify* ground-atom (:form %)) %) facts)]
                                             (-> fact
                                                 (assoc :fact? true)
                                                 (assoc :from (:id fact))
-                                                (assoc :cnf (vector {:pred ground-atom :neg? false}))
+                                                (assoc :cnf (vector (form2lit ground-atom))) ; 2023rf {:pred ground-atom :neg? false}
                                                 (assoc :using-proof (:using-proof ?pc))
                                                 (assoc :comment (cl-format nil "~A" ground-atom)))
                                             (log/error "Cannot unify fact for pclause: ground-atom=" ground-atom "step=" step)) ; ToDo: checking for this should be temporary.
@@ -109,7 +129,7 @@
                                               (assoc ?a :id (-> "assume-" (str (-> kb :vars :assumption-count deref)) keyword))
                                               (assoc ?a :from (:id ?a)) ; :id is going to defined using :from
                                               (assoc ?a :prob (assumption-prob (first ground-atom) kb))
-                                              (assoc ?a :form ground-atom) ; 2023rf added. Might not be necessary, but looks useful.
+                                              (assoc ?a :form ground-atom) ; Not necessary to track this, but might be useful for debugging.
                                               (assoc ?a :cnf (vector {:pred ground-atom :neg? false}))
                                               (assoc ?a :comment (cl-format nil "~A" ground-atom)))))))
 
@@ -118,6 +138,13 @@
   [rule]
   (into (vector (form2lit (:head rule)))
         (mapv #(-> % form2lit complement-lit) (:tail rule))))
+
+(defn combine-rule-non-rule
+  "Combine rule pclauses with non-rule pclause.
+   +It would be a simple into, but factual-nots are removed.+"
+  [rule-pclauses fact-pclauses]
+  (into rule-pclauses
+        fact-pclauses))
 
 (defn pclauses-for-rule
   "Return
@@ -139,20 +166,21 @@
                          {}
                          (map #(vector %1 %2) rule-preds ground-atoms))
         rule-pclause (-> rule
-                         (assoc :cnf (rule2cnf rule)) ; 2023rf
+                         (assoc :cnf (rule2cnf rule))
                          (dissoc :head :tail :id)
                          (assoc :rule? true)
                          (assoc :using-proof proof-id)
                          (assoc :bindings bindings) ; ToDo: I don't know that it is useful, but bindings have been such a problem...
                          (assoc :from rule-id)
                          (update :cnf (fn [cnf] (mapv (fn [term] (update term :pred #(uni/subst % bindings))) cnf)))
-                         (assoc :comment (str rule-id " "  bindings  " " (uni/subst (:head rule) bindings))))
+                         (assoc :comment (str rule-id " "  bindings  " " (really! (uni/subst (:head rule) bindings)))))
+        ;; This one will produce pclauses for fnot-facts. Those are pulled out (if appropriate /always appropriate)? in combine-rule-non-rule
         non-rule-steps-used (reduce (fn [res g-rhs] (conj res (some #(when (= g-rhs (:form %)) %) steps)))
                                     []
                                     (remove (fn [atm] (some #(unify* atm %) heads)) (rest ground-atoms)))]
     {:pclauses
-     (into (vector rule-pclause)
-           (mapv #(pclause-for-non-rule kb proof-id %) non-rule-steps-used))
+     (combine-rule-non-rule (vector rule-pclause)
+                            (mapv #(pclause-for-non-rule kb proof-id %) non-rule-steps-used))
      :steps
      (if (empty? non-rule-steps-used)
        (-> steps rest vec)
@@ -345,7 +373,7 @@
    truthy is merge of kb :facts :rules and :assumptions."
   [form truthy]
   (let [unifies-with (reduce (fn [res tr]
-                               (if (unify* form (:form tr)) ; 2023rf second arg to unify was (-> f :cnf first :pred) AGAIN!
+                               (if (unify* form (:form tr))
                                  (conj res (:id tr))
                                  res))
                              []
@@ -362,7 +390,6 @@
    This is computed for each proof-id because the proofs get to the propositions in the prop-ids through different rules.
    Where a proposition isn't used by the proof (it is a fact and) it is unified with a KB fact."
   [{:keys [proof-vecs prop-ids rules facts assumptions z-vars]} proof-id]
-  (reset! diag rules)
   (letfn [(get-prob [step]
              (cond (:rule? step)       (-> (get rules (:rule-id step)) :prob)
                    (:fact? step)       (-> (get facts (:fact-id step)) :prob)
@@ -374,7 +401,7 @@
                                                         (assoc :id   (:id v))
                                                         (assoc :form (:head v))
                                                         (assoc :prob (:prob v)))))
-                                       {} rules)))  ; 2023rf was (merge rules)
+                                       {} rules)))
           prop-ids-inv (sets/map-invert prop-ids)
           steps  (-> proof-vecs proof-id :steps)
           z-vars+ (into z-vars (map #(- %) z-vars))
@@ -557,7 +584,7 @@
    to avoid an exponential number of clauses.
    Specificaly, there are 2*num-props + (num-solutions)(num-solutions-1)/2 + 1 clauses
    divided among several types as follows:
-     - type-0: optionally, where :all-individuals? is false (the default) the query must be true
+     - type-0: optionally, where :all-individuals? is false (the default) the query must be true.
      - type-1: mandatory, 1 clause with all the Z variables, requiring at least one of the solutions.
      - type-2: mandatory, implications for rules that have as their head the query; this DEFINES the z-vars.
                z-var => <a top-level rule RHS pred>, written as NOT z-var OR <the top-level rule RHS pred>
@@ -580,12 +607,14 @@
                                 m)))
                           {}
                           (reduce into [] prf-vecs))
+        all-indv? (-> kb :params :all-individuals?)
         query-int (-> pids (get (:query kb)))
-        type-0    (if (-> kb :params :all-individuals?) [] (-> query-int vector vector))
-        type-1    (vector zids)
-        type-2    (cond->> (reduce-kv (fn [res z-var preds] (into res (mapv #(conj [(- z-var)] (get pids %)) preds))) [] z2prop) ; ToDo: Implement all-individuals.
-                    true                                  (mapv (fn [vec] (sort vec))) ; pprint order the predicates in the clause.
-                    true                                  (sort-by #(apply max (map abs %))))    ; pprint order the clause by rule they address.
+        type-0    (if all-indv? [] (-> query-int vector vector))
+        type-1    (if all-indv? [] (vector zids))
+        type-2    (if all-indv? []
+                      (cond->> (reduce-kv (fn [res z-var preds] (into res (mapv #(conj [(- z-var)] (get pids %)) preds))) [] z2prop) ; ToDo: Implement all-individuals.
+                        true                                  (mapv (fn [vec] (sort vec))) ; pprint order the predicates in the clause.
+                        true                                  (sort-by #(apply max (map abs %)))))    ; pprint order the clause by rule they address.
         type-3    [] ;(mapv   (fn [[x y]] (vector (- x) (- y))) (combo/combinations zids 2)) ; ToDo: Needs thought!
         type-4    (if (-> kb :params :global-disjoint?)
                     (->> (map (fn [prop-id] (conj (z-using (pids-inv prop-id) prop2z) (- prop-id))) prop-ids)
@@ -697,6 +726,7 @@
           #{}
           (map :cnf pclauses)))
 
+;;; ToDo: Is this even necessary since form2lit does the work and have rule2cnf? (And is it screwing things up.)
 (defn add-not-head-pclauses
   "Return new pclauses for rules with NOT in the head.
    Purposes of these rules include

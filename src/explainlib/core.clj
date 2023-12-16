@@ -202,21 +202,6 @@
                               %)
                            tail))))
 
-;;; ToDo: This assumes there is a :parent-fact. More work needed if an assumption or observation is being used.
-(defn add-facts-for-factual-nots
-  "Rule tails can use (not <some predicate>). These are treated as facts in themselves
-   In the current implementation there must be a parent fact must exist."
-  [facts rules]
-  (let [fact-atm (atom (set facts))]
-    (doseq [rule rules]
-      (doseq [rhs-elem (:tail rule)]
-        (when-let [parent (-> rhs-elem meta :parent-fact)]
-          (if-let [fmap (some #(when (unify* parent (:form %)) %) facts)] ; 2023rf :form was :fact
-            (swap! fact-atm conj {:prob (- 1.0 (:prob fmap)) :form rhs-elem}) ; 2023rf :form was :fact
-            (log/warn "Factual not (not in RHS of a rule) without corresponding fact:" rhs-elem)))))
-    ;; ToDo: Would be nice were they to keep the order in they originally had.
-    (-> fact-atm deref vec)))
-
 (def valid-kb-keys "Keys allowed in a defkb declaration."
   #{:rules :facts :observations :eliminate-by-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
     :black-listed-preds :black-list-prob :default-assume-prob :global-disjoint? :requires-evidence? :all-individuals?})
@@ -260,7 +245,7 @@
                                          :elimination-priority       '~elimination-priority
                                          :eliminate-by-assumptions   '~eliminate-by-assumptions}
                                 :rules '~rw-rules
-                                :facts '~facts  ; '~(add-facts-for-factual-nots facts rw-rules) 2023rf
+                                :facts '~facts
                                 :assumptions-used (atom {})
                                 :observations '~observations}))))))
 
@@ -812,7 +797,7 @@
   [kb]
   (let [data (-> []
                  (into (:observations kb))
-                 (into (->> kb :facts vals (map #(:form %)))))] ; 2023rf #(-> % :cnf first :pred)))))]
+                 (into (->> kb :facts vals (map #(:form %)))))]
     (group-by first data)))
 
 ;;;======================================= Toplevel =========================================
@@ -886,6 +871,16 @@
         (cl-format stream "~%~A" prop-id)))
     (cl-format stream "~%")))
 
+;;; ToDo: Of course, an objective is to eliminate this!
+(defn really!
+  "After saturating the code with doall around :form and getting nowhere, I try this."
+  [obj]
+  (if (= (type obj) clojure.lang.LazySeq)
+    (let [res (cl-format nil "~A" (doall obj))]
+      ;(log/info "Really!:" obj "returning res = " res)
+      res)
+    obj))
+
 (defn name2num
   "Return the number n of :fact-n or :rule-n."
   [id]
@@ -899,21 +894,12 @@
                (:prob rule) (:id rule) (:head rule) (:tail rule)))
   (doseq [fact (->> kb :facts vals (sort-by #(name2num (:id %))))]
     (cl-format stream "~%~5,3f ~9A :: ~A"
-               (:prob fact) (:id fact) (:form fact))) ; 2023rf (-> fact :cnf first lit2form)
+               (:prob fact) (:id fact) (:form fact)))
   (doseq [assum (->>  kb :pclauses (filter :assumption?))]
     (cl-format stream "~%~5,3f ~9A :: ~A"
-               (:prob assum) (:id assum) (:form assum))) ; 2023 rf (-> assum :cnf first lit2form)))
+               (:prob assum) (:id assum) (:form assum)))
   (cl-format *out* "~{~%~A~}" (:observations kb))
   true)
-
-(defn really!
-  "After saturating the code with doall around :form and getting nowhere, I try this."
-  [obj]
-  (if (= (type obj) clojure.lang.LazySeq)
-    (let [res (cl-format nil "~A" (doall obj))]
-      ;(log/info "Really!:" obj "returning res = " res)
-      res)
-    obj))
 
 (defn report-summary
   [kb stream]
@@ -921,11 +907,11 @@
             (let [res (atom "")]
               (doseq [step (-> kb :proof-vecs proof-id :steps)]
                 (cond (:rule? step) (swap! res #(str % " " (-> step :rule-id name) ": " (-> step :form really!) " := "))
-                      (:fact? step) (swap! res #(str % " " (-> step :form doall) " "))
+                      (:fact? step) (swap! res #(str % " " (-> step :form really!) " "))
                       (:assumption? step) (swap! res #(str % " " (-> step :form doall) " "))))
               @res))]
     (cl-format stream "~%")
-    (doseq [[proof-id prob] (->> kb :mpe :summary seq (sort-by #(-> % second)) reverse)]
+    (doseq [[proof-id prob] (->> kb :mpe :summary seq (sort-by #(-> % second)) reverse doall)]
       (cl-format stream "~%~9A : ~8,6f ~A" proof-id prob (proof-str proof-id)))))
 
 (defn report-results

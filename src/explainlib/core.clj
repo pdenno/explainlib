@@ -204,20 +204,19 @@
 
 (def valid-kb-keys "Keys allowed in a defkb declaration."
   #{:rules :facts :observations :eliminate-by-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
-    :black-listed-preds :black-list-prob :default-assume-prob :global-disjoint? :requires-evidence? :all-individuals?})
+    :black-listed-preds :black-list-prob :default-assume-prob :requires-evidence? :all-individuals?})
 
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
    will be generated afterwards. Its facts are observations. Each observation is a ground
    literal that will be processed through BALP to generate all proof trees."
   [name doc-string & {:keys [rules facts observations eliminate-by-assumptions elimination-priority elimination-threshold cost-fn inv-cost-fn
-                             black-listed-preds black-list-prob default-assume-prob global-disjoint? requires-evidence? all-individuals?]
+                             black-listed-preds black-list-prob default-assume-prob requires-evidence? all-individuals?]
            :or {rules                      []
                 facts                      []
                 observations               []
                 eliminate-by-assumptions   #{}
                 elimination-priority       []
-                global-disjoint?           false ; Say this explicitly for default-params map.
                 cost-fn                    maxsat/rc2-cost-fn
                 inv-cost-fn                maxsat/rc2-cost-fn-inv
                 all-individuals?           default-all-individuals?
@@ -232,11 +231,10 @@
       (let [rw-rules (mapv rewrite-rule-factual-nots rules)]
         `(def ~name (identity  {:doc-string ~doc-string
                                 :vars {:assumption-count (atom 0)
-                                       :num-skolems (atom 0)
-                                       :cost-fn ~cost-fn,
-                                       :inv-cost-fn ~inv-cost-fn}
-                                :params {:all-individuals?           ~all-individuals?
-                                         :global-disjoint?           ~global-disjoint?
+                                       :num-skolems (atom 0)}
+                                :params {:cost-fn                    ~cost-fn,
+                                         :inv-cost-fn                ~inv-cost-fn
+                                         :all-individuals?           ~all-individuals?
                                          :black-listed-preds         ~black-listed-preds
                                          :black-list-prob            ~black-list-prob
                                          :default-assume-prob        ~default-assume-prob
@@ -361,7 +359,7 @@
                                      (assoc pvec-map :pvec-props
                                             (->> (remove (fn [pred] (some #(= pred %) observations+))
                                                          (->> pvec-map :steps (map :form)))
-                                                 (map #(or (fact-not? %) %))
+                                                 (map #(or (fact-not? %) %)) ; <=============================================================== Wrong, I think.
                                                  distinct
                                                  vec))))
                             {} ?pvecs))]
@@ -806,7 +804,7 @@
   "Toplevel function to adduce proof trees, generate the MAXSAT problem,
    run it, and translate the result back to predicates."
   [query kb & {:keys[loser-fn max-together observations params] :or {loser-fn identity max-together 10}}]
-  (let [observations+ (conj observations query kb)]
+  (let [observations+ (conj observations query)]
     (as->  kb ?kb
       (finalize-kb ?kb query)
       (clear! ?kb)
@@ -815,27 +813,22 @@
       (update ?kb :raw-proofs     #(add-proof-binding-sets %)) ; not tested much!
       (assoc  ?kb :proof-vecs      (flatten-proofs (:raw-proofs ?kb)))
       (update ?kb :proof-vecs     #(winnow-proofs % observations+ params))
-      (assoc  ?kb :pclauses        (maxsat/collect-pclauses ?kb))
-      (update ?kb :pclauses       #(into % (maxsat/inverse-assumptions ?kb)))
-      (update ?kb :pclauses       #(into % (maxsat/inverse-facts ?kb)))
-      (update ?kb :pclauses       #(into % (maxsat/inverse-rules ?kb)))
-      (update ?kb :pclauses       #(into % (maxsat/add-not-head-pclauses ?kb)))
+      (assoc  ?kb :pclauses        (mapcat #(maxsat/generate-pclauses-from-pvec ?kb %) (-> ?kb :proof-vecs vals)))
+      (update ?kb :pclauses       #(maxsat/dedupe-pclauses %))
+      (update ?kb :pclauses       #(maxsat/add-inverse-pclauses %))
       (assoc  ?kb :pclauses        (maxsat/reduce-pclauses ?kb))
       (update ?kb :pclauses       #(maxsat/add-id-to-comments %))
-      ;(break-here ?kb)
       (maxsat/run-problem ?kb :loser-fn loser-fn :max-together max-together))))
 
 ;;;======================================= Reporting ====================================
 (defn report-problem
   "Print the WDIMACS problem with pclause comments."
-  [kb stream & {:keys [comments? print-threshold] :or {comments? true print-threshold 100}}]
+  [kb stream & {:keys [print-threshold] :or {print-threshold 100}}]
   (let [num-zvars (-> kb :z-vars count)
         size      (/ (* num-zvars (dec num-zvars)) 2)]
     (if (> size print-threshold)
       (cl-format stream "~%Printing of WDIMACS suppressed owing to the problem being large.~%")
-      (if comments?
-        (cl-format stream "~A" (or (:wdimacsc kb) (:wdimacs kb)))
-        (cl-format stream "~A" (:wdimacs  kb))))))
+      (cl-format stream "~A" (maxsat/wdimacs-string kb :commented? true)))))
 
 (defn solution-props
   "Return a vector of propositions corresponding to the individual's model (a vector of PIDs)."
@@ -848,17 +841,20 @@
 
 (defn report-solutions
   "Print an interpretation of the solutions."
-  [kb stream & {:keys [solution-number] :or {solution-number 0}}]
-  (let [num-sols (-> kb :mpe :solutions count)]
-    (if (> num-sols solution-number)
-      (do (cl-format stream "~%")
-          (doseq [sol (-> kb :mpe :solutions)]
-            (cl-format stream "~%cost:  ~4d, model: ~A,  satisfies: ~A,  :pvec-props ~A"
-                       (:cost sol) (:model sol) (:satisfies-proofs sol)
-                       (solution-props sol (:prop-ids kb) (:query kb)))))
-      ;; No solutions, so just show p-inv
-      (cl-format stream "No solution.~2%~{~A~%~}"
-                 (->> kb :prop-ids clojure.set/map-invert vec (sort-by first))))
+  [{:keys [mpe params] :as kb} stream & {:keys [solution-number] :or {solution-number 0}}]
+  (cl-format stream "~%")
+  (let [num-sols (-> mpe :solutions count)]
+    (if (:all-individuals? params)
+      (doseq [{:keys [prob model]} mpe]
+        (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}]" prob model))
+      (if (> num-sols solution-number)
+        (doseq [sol (-> kb :mpe :solutions)]
+          (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
+                     (:prob sol) (:model sol) (:satisfies-proofs sol)
+                     (solution-props sol (:prop-ids kb) (:query kb))))
+        ;; No solutions, so just show p-inv
+        (cl-format stream "No solution.~2%~{~A~%~}"
+                   (->> kb :prop-ids clojure.set/map-invert vec (sort-by first)))))
     true))
 
 (defn report-prop-ids

@@ -6,6 +6,7 @@
    [clojure.spec.alpha           :as s]      ; for debugging.
    [clojure.test                :refer [deftest is testing]]
    [explainlib.core :as explain :refer [defkb explain report-results]]
+   [explainlib.maxsat           :as maxsat]
    [explainlib.specs            :as specs] ; for debugging
    [explainlib.util             :as util :refer [varize]] ; for debugging
    [taoensso.timbre             :as log]))
@@ -29,43 +30,47 @@
 ;;;                                  -c    d   |   0.1        -c ->  d                0.07
 ;;;                                  -c   -d   |   0.9    INV -c ->  d                0.63 (Since these are all possible individuals, the sum is 1.0.)
 ;;; Note that the things you get back from MAXSAT are the costs of clauses you violated; lowest cost is the most likely explanation but to
-;;; get a probability back you'd have to plug the answer back into the Bayes net. (Not implemented owing to need to study "model counting" more.)
+;;; get a probability back you'd have to plug the answer back into the Bayes net.
+;;; In this example (park-all-indv below) we use parameter :all-individuals?=true which is useful for validation of small tests like this.
+;;; It doesn't provide explanations for D (dee) specifically though.
+;;; It is useful in cases where you want something other than the sort of model counting we do when :all-individuals?=false.
+(deftest park-all-indv
+  (testing "Testing that park-kb MPE calculation is correct."
+    (is (= [{:model [-1, -2], :cost 47,  :prob 0.63}
+            {:model [ 1, -2], :cost 142, :prob 0.24}
+            {:model [-1,  2], :cost 266, :prob 0.06999999999999999}
+            {:model [ 1,  2], :cost 281, :prob 0.06}] ; These sum to 1.0 as above.
+           (-> '(dee foo) (explain  park-kb) :mpe)))))
 
 (deftest park-concept
   (testing "Demonstrating the concept of using a MAXSAT solver for MPE."
     (testing "The presentation of WDIMACS using report-problem as shown has end comments, which isn't legal syntax."
-      (is (= (->> ["p wcnf 4 14 737"
-                   "737                  3    4    0 c At least one solution."
-                   "737                 -3   -4    0 c Not both solutions."
-                   "737        1         3         0 c If not solution 3 then (fnot/cee foo)."
-                   "737             2         4    0 c If not solution 4 then (cee foo)."
-                   "737       -1              4    0 c If not solution 4 then (not (fnot/cee foo))." ; This kind of clause (these two) might be optional.
-                   "737            -2    3         0 c If not solution 3 then (not (cee foo))."      ; They force disjointedness, which can be useful for classification.
+      (is (= (->> ["p wcnf 2 6 581"                ; There are 2 variables, 6 clauses and the sum of the costs + 1 = 581.
+                   ""                              ; There are no hard clauses because of :all-individuals?=true
+                   "1 : 120     -1         0 c fact-1 (:fact/not cee foo)"
+                   "2 : 36       1         0 c fact-1 (cee foo)"
+                   "3 : 22      -1    2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo)"
+                   "4 : 161     -1   -2    0 c rule-1-inv :rule-1 {?x-r1 foo} (dee foo) | INV"
+                   "5 : 11       1    2    0 c rule-2 :rule-2 {?x-r2 foo} (dee foo)"
+                   "6 : 230      1   -2    0 c rule-2-inv :rule-2 {?x-r2 foo} (dee foo) | INV"
                    ""
-                   "1 : 120      1         0 c fact-1 (fnot/cee foo)"
-                   "2 : 36      -1         0 c fact-1-inv (fnot/cee foo) | INV"
-                   "3 : 36            2    0 c fact-2 (cee foo)"
-                   "4 : 120          -2    0 c fact-2-inv (cee foo) | INV"
-                   "5 : 230     -1         0 c rule-2-inv :rule-2 {?x-r2 foo} (dee foo) | INV | REDU (dee foo)"
-                   "6 : 11      -1         0 c rule-2 :rule-2 {?x-r2 foo} (dee foo) | REDU (not (dee foo))"
-                   "7 : 161          -2    0 c rule-1-inv :rule-1 {?x-r1 foo} (dee foo) | INV | REDU (dee foo)"  ; <======= WRONG! No REDU (dee foo).
-                   "8 : 22           -2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo) | REDU (not (dee foo))"
+                   "prob:  0.63000, model: [ -1, -2]"
+                   "prob:  0.24000, model: [  1, -2]"
+                   "prob:  0.07000, model: [ -1,  2]"
+                   "prob:  0.06000, model: [  1,  2]"
                    ""
-                   "  1: cost:   313 model: [1, -2, -3, 4]  proof: :proof-2  :pvec [(fnot/cee foo)]"
-                   "  2: cost:   423 model: [-1, 2, 3, -4]  proof: :proof-1  :pvec [(cee foo)]"
                    ""
-                   "[(fnot/cee foo) 1]"
-                   "[(cee foo) 2]"
+                   "[(cee foo) 1]"
+                   "[(dee foo) 2]  (The query)"
                    ""
                    "0.200 :rule-1   :: (dee ?x-r1) :- (cee ?x-r1) "
-                   "0.100 :rule-2   :: (dee ?x-r2) :- (fnot/cee ?x-r2) "
-                   "0.700 :fact-1   :: (fnot/cee ?x-f1)"
-                   "0.300 :fact-2   :: (cee ?x-f2)"]
+                   "0.100 :rule-2   :: (dee ?x-r2) :- (:fact/not cee ?x-r2) "
+                   "0.300 :fact-1   :: (cee ?x)"]
                   (interpose "\n")
                   (apply str))
              (let [log-vec (atom [])]
                (binding [log/*config* (assoc log/*config* :appenders {:println {:enabled? true :fn #(swap! log-vec conj (-> % :vargs first))}})]
-                 (with-out-str (-> (explain '(dee foo) park-kb) (explain/report-problem *out*))))))))))
+                 (with-out-str (-> (explain '(dee foo) park-kb) (explain/report-results *out*))))))))))
 
 ;;;==================================== Simple end-to-end MPE =====================================
 
@@ -88,24 +93,6 @@
   :facts [{:prob 0.7 :form (burglary ?loc)}
           {:prob 0.2 :form (earthquake ?loc)}])
 
-;;; ToDo: Check this one.
-(defkb alarm-2-kb ; ToDo: Write a test that uses this KB.
-  "A KB for a problem in the ProbLog documentation. This one hasn't been validated." ; ToDo: validate.
-  :rules [{:prob 0.9
-           :head  (alarm ?loc)
-           :tail  [(burglary ?loc) (earthquake ?loc)]}
-          {:prob 0.8
-           :head  (alarm ?loc)
-           :tail  [(burglary ?loc) (not (earthquake ?loc))]}
-          {:prob 0.1
-           :head  (alarm ?loc)
-           :tail  [(not (burglary ?loc)) (earthquake ?loc)]}
-          {:prob 0.01
-           :head  (alarm ?loc)
-           :tail  [(not (burglary ?loc)) (not (earthquake ?loc))]}]
-  :facts [{:prob 0.7 :form (burglary ?loc)}
-          {:prob 0.2 :form (earthquake ?loc)}])
-
 ;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
 (defkb road-is-slow-even-kb
   "The ProbLog blocked road KB. Everything is equal, thus heavy-snow is just as likely as accident."
@@ -122,7 +109,6 @@
 
 (defkb road-is-slow-kb
   "The blocked road KB. From a ProbLog example, I think."
-;  :global-disjoint? true
   :rules  [{:prob 0.8 ; Thus it is the more reliable rule.
             :head (road-is-slow ?loc)
             :tail [(heavy-snow ?loc) (bad-road-for-snow ?loc)]}
@@ -290,6 +276,19 @@
     (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
       (is (= {:proof-1 0.24652800000000008, :proof-2 0.06311199999999999}
              (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) :mpe :summary))))))
+
+(deftest proof-steps
+  (testing "Testing steps of proofs."
+    (let [kb (-> '(alarm plaza) (explain alarm-kb))] ; This "does too much" but it can be redone for the test
+      (testing "Testing prove-fact"
+        (is (=  '{:prv (burglary plaza),
+                  :caller {:bindings {}},
+                  :proofs
+                  [{:prob 0.7, :form (burglary ?loc), :id :fact-1, :prvn (burglary plaza), :bindings {?loc plaza}, :fact-used? true, :fact-id :fact-1}]}
+                (explain/prove-fact kb {:prv '(burglary plaza) :caller {:bindings {}}}))))
+      (testing "Testing fact-solve"
+        (is (= '({:prob 0.7, :form (burglary ?loc), :id :fact-1, :prvn (burglary plaza), :bindings {?loc plaza}})
+               (explain/fact-solve? kb '(burglary plaza))))))))
 
 
 ;;;==================================== Other one- and two-rule MPE =====================================
@@ -871,8 +870,8 @@
         (as-> kb+setup ?exp
           (update-in ?exp [:kb :assumptions-used] atom)
           (assoc-in ?exp [:kb :vars]
-                    {:cost-fn      explainlib.core/neg-log-cost-fn
-                     :inv-cost-fn  explainlib.core/neg-log-cost-fn-inv
+                    {:cost-fn      maxsat/rc2-cost-fn
+                     :inv-cost-fn  maxsat/rc2-cost-fn-inv
                      :assumption-count (atom 0)
                      :pclause-count (atom 0)
                      :num-skolems (atom 0)})

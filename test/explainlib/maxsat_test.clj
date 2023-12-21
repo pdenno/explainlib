@@ -23,16 +23,16 @@
 ;;;
 ;;; The WCNF cost is incurred if the individual has all literals opposite of the WCNF line.
 
-(def simplest-maxsat ; The solution to this one is described at deftest maxsat-test.
-  "p wcnf 2 7 321
-c This is a comment.  'c' in first column, then a space!
-70        1           0
-30       -1           0
-20              2     0
-80             -2     0
-90        1    -2     0
-20       -1     2     0
-10       -1    -2     0")
+(def simple-maxsat-1
+"p wcnf 2 6 581
+
+120     -1         0
+36       1         0
+22      -1    2    0
+161     -1   -2    0
+11       1    2    0
+230      1   -2    0")
+
 
 ;;; 1 : 70        1           0
 ;;; 2 : 30       -1           0
@@ -72,23 +72,25 @@ c This is a comment.  'c' in first column, then a space!
 36                          -5                  -9    0")
 
 (deftest maxsat-tests
-  (testing "that max-sat problems work."   ; The individual incurs the cost if they disagree on ALL literals of the WCNF line. (See numbered lines above.)
-    (is (= [{:model [1,  -2], :cost 70}    ; L2 + L3 + L6      = 30 + 20 + 20      = 70
-            {:model [-1, -2], :cost 90}    ; L1 + L3           = 70 + 20           = 90
-            {:model [1,   2], :cost 120}   ; L2 + L4 + L7      = 30 + 80 + 10      = 120
-            {:model [-1,  2], :cost 240}]  ; L1 + L4 + L5      = 70 + 80 + 90      = 240
-           (maxsat/run-rc2-problem (wcnf/WCNF nil :from_string simplest-maxsat) 10)))
-    (is (= [{:model [ 1, -2, -3, -4, -5,  6, -7, -8, -9], :cost 238}
-            {:model [-1,  2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
-            {:model [ 1, -2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
-            {:model [-1,  2, -3, -4, -5,  6, -7, -8, -9], :cost 322}
-            {:model [-1,  2, -3, -4, -5, -6,  7, -8, -9], :cost 322}
-            {:model [ 1,  2, -3, -4, -5,  6, -7, -8, -9], :cost 330}
-            {:model [ 1, -2, -3,  4, -5,  6, -7, -8, -9], :cost 330}
-            {:model [ 1, -2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
-            {:model [-1,  2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
-            {:model [ 1,  2, -3, -4, -5,  6,  7, -8, -9], :cost 366}]
-           (maxsat/run-rc2-problem (wcnf/WCNF nil :from_string another-maxsat) 10)))))
+  (testing "Testing that max-sat problems work."   ; The individual incurs the cost if they disagree on ALL literals of the WCNF line. (See numbered lines above.)
+    (testing "Testing a model like Park :all-individuals?=true"
+      (is (= [{:model [-1, -2], :cost 47}
+              {:model [ 1, -2], :cost 142}
+              {:model [-1,  2], :cost 266}
+              {:model [ 1,  2], :cost 281}]
+             (maxsat/run-rc2-problem (wcnf/WCNF nil :from_string simple-maxsat-1) 10))))
+    (testing "Testing another simple maxsat."
+      (is (= [{:model [ 1, -2, -3, -4, -5,  6, -7, -8, -9], :cost 238}
+              {:model [-1,  2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
+              {:model [ 1, -2, -3, -4, -5, -6, -7, -8, -9], :cost 286}
+              {:model [-1,  2, -3, -4, -5,  6, -7, -8, -9], :cost 322}
+              {:model [-1,  2, -3, -4, -5, -6,  7, -8, -9], :cost 322}
+              {:model [ 1,  2, -3, -4, -5,  6, -7, -8, -9], :cost 330}
+              {:model [ 1, -2, -3,  4, -5,  6, -7, -8, -9], :cost 330}
+              {:model [ 1, -2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
+              {:model [-1,  2, -3, -4, -5,  6,  7, -8, -9], :cost 358}
+              {:model [ 1,  2, -3, -4, -5,  6,  7, -8, -9], :cost 366}]
+             (maxsat/run-rc2-problem (wcnf/WCNF nil :from_string another-maxsat) 10))))))
 
 (def tseitin-2
   "p wcnf 6 15 824

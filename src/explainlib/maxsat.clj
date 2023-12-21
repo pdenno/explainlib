@@ -49,15 +49,6 @@
     {:pred base-form :neg? true}
     {:pred form :neg? false}))
 
-#_(defn form2lit
-  "Return a literal. It looks like {:pred (some form) :neg? true|false}.
-   When argument form has {:factual-not? true} so will the :pred.
-   :neg? is always returned false."
-  [form]
-  (s/assert ::specs/proposition form)
-  (let [form (varize form)]  ; BTW varize preserves fnot meta.
-    {:pred form :neg? false}))
-
 (defn complement-lit
   "Complement the argument literal."
   [lit]
@@ -106,42 +97,44 @@
    This can be a bit confusing: negated predicates in a step are part of an explanation; they need their own pclauses.
    Later in processing we'll need a pclause for the negation of every predicate (whether it is positive or negative literal)."
   [kb proof-id step]
-  (let [ground-atom (:form step)
-        facts (-> kb :facts vals)]
+  (let [facts (-> kb :facts vals)]
     (as-> {:using-proof proof-id} ?pc
       (cond (:observation? step)          (-> ?pc
                                               (assoc :observation? true)
-                                              (assoc :form ground-atom)
+                                              (assoc :cnf (-> step :form form2lit vector))
                                               (assoc :remove? true)
                                               (assoc :prob 1.0)
                                               (assoc :comment (cl-format nil "OB ~A" (:form step))))
-            (:fact? step)                 (if-let [fact (some #(when (unify* ground-atom (:form %)) %) facts)]
-                                            (-> fact
-                                                (assoc :fact? true)
-                                                (assoc :from (:id fact))
-                                                (assoc :cnf (vector (form2lit ground-atom))) ; 2023rf {:pred ground-atom :neg? false}
-                                                (assoc :using-proof (:using-proof ?pc))
-                                                (assoc :comment (cl-format nil "~A" ground-atom)))
-                                            (log/error "Cannot unify fact for pclause: ground-atom=" ground-atom "step=" step)) ; ToDo: checking for this should be temporary.
+            (:fact? step)                 (if-let [fact (some #(when (unify* (:form step) (:form %)) %) facts)]
+                                            (let [fnot? (-> step :form fact-not?)]
+                                              (as-> fact ?f
+                                                (assoc ?f :fact? true)
+                                                (assoc ?f :prob (if fnot? (- 1.0 (:prob fact)) (:prob fact)))
+                                                (assoc ?f :from (:id fact))
+                                                (assoc ?f :cnf (-> step :form form2lit vector))
+                                                (assoc ?f :using-proof (:using-proof ?pc))
+                                                (assoc ?f :comment (cl-format nil "~A" (:form step)))
+                                                (dissoc ?f :form)))
+                                            (log/error "Cannot unify fact for pclause: ground-atom=" (:form step) "step=" step)) ; ToDo: checking for this should be temporary.
             (:assumption? step)           (as-> ?pc  ?a ; ?pc will be a mapp with one key: {:using-proof ...}
                                               (assoc ?a :assumption? true)
                                               (assoc ?a :used-in (set [proof-id]))
                                               (assoc ?a :id (-> "assume-" (str (-> kb :vars :assumption-count deref)) keyword))
                                               (assoc ?a :from (:id ?a)) ; :id is going to defined using :from
-                                              (assoc ?a :prob (assumption-prob (first ground-atom) kb))
-                                              (assoc ?a :form ground-atom) ; Not necessary to track this, but might be useful for debugging.
-                                              (assoc ?a :cnf (vector {:pred ground-atom :neg? false}))
-                                              (assoc ?a :comment (cl-format nil "~A" ground-atom)))))))
+                                              (assoc ?a :prob (assumption-prob (first (:form step)) kb))
+                                              (assoc ?a :cnf (-> step :form form2lit vector))
+                                              (assoc ?a :form (:form step)) ; Unlike :fact? and :observation, this is needed!
+                                              (assoc ?a :comment (cl-format nil "~A" (:form step))))))))
 
-(defn rule2cnf ; This ought to be called rule2horn!
+(defn rule2cnf
   "Return the CNF corresponding to the rule, a vector of literal MAPS."
   [rule]
-  (into (vector (form2lit (:head rule)))
+  (into (vector (form2lit (:head rule))) ; This should handle "not-head rules" too.
         (mapv #(-> % form2lit complement-lit) (:tail rule))))
 
 (defn combine-rule-non-rule
   "Combine rule pclauses with non-rule pclause.
-   +It would be a simple into, but factual-nots are removed.+"
+   This is broken out to facilitate debugging."
   [rule-pclauses fact-pclauses]
   (into rule-pclauses
         fact-pclauses))
@@ -195,9 +188,8 @@
              (swap! remaining #(into (subvec % 0 pos) (subvec % (inc pos))))))
          @remaining))}))
 
-;;; (collect-from-pvec eee (-> eee :proof-vecs :proof-1))
-(defn collect-from-pvec
-  "Loop through the pvec consuming steps and pushing pclauses."
+(defn generate-pclauses-from-pvec
+  "Generate a pclause for each step in a pvec."
   [kb pvec]
   (let [proof-id (:proof-id pvec)]
     (loop [steps (:steps pvec)
@@ -209,23 +201,20 @@
             (let [{:keys [pclauses steps]} (pclauses-for-rule kb steps proof-id)]
               (recur steps (into collected pclauses) (dec safe-max)))))))
 
-(defn collect-pclauses
-  "Collect pclauses noting with the set :used-in which proofs they are used-in."
-  [kb]
-  (let [pclauses-by-cnf
-        (as-> (-> kb :proof-vecs vals) ?p
-          (mapcat #(collect-from-pvec kb %) ?p)
-          (group-by :cnf ?p) ; No :cnf on observations. They all go to nil, which is okay.
-          (dissoc ?p nil))]
-    (->> (reduce-kv (fn [res _ clauses]
-                      (let [used-in (-> (map :using-proof clauses) set)]
-                        (conj res (-> (first clauses)
-                                      (dissoc :using-proof)
-                                      (assoc :used-in used-in)))))
-                    []
-                    pclauses-by-cnf)
-         ;; These ID's will be made unique later, through reduction and inversion.
-         (mapv #(assoc % :id (:from %))))))
+(defn dedupe-pclauses
+  "Several proofs can use essentially the same pclauses (differing only by :using-proof).
+   This function reduces the set of pclauses to a unique set using their CNF.
+   It sets the :used-in to a set of all proofs in which the pclause is found."
+  [pclauses]
+  (as-> pclauses ?p
+    (group-by :cnf ?p)
+    (reduce-kv (fn [res _k v]
+                 (conj res (-> (first v)
+                               (assoc :used-in (->> v (map :using-proof) set))
+                               (dissoc :using-proof))))
+               []
+               ?p)
+    (mapv #(assoc % :id (:from %)) ?p)))
 
 (defn reduce-pclause-using-observations
   "Reduce the pclause's :cnf by applying evidence (See J.D. Park, 2002):
@@ -332,41 +321,30 @@
       (log/warn "Factual not predicate" bad "does not have a corresponding positive predicate."))
     (zipmap (sort-by first normal?) (range 1 (-> normal? count inc)))))
 
-(defn inverse-assumptions
-  "Return a vector inverses of the assumptions used."
-  [kb]
-  (letfn [(pinv [pc]
-            (-> pc
-                (update-in [:cnf 0 :neg?] not)
-                (update :prob #(- 1.0 %))
-                (update :id #(-> % name (str "-inv") keyword))
-                (update :comment #(str % " | INV"))))]
-    (map pinv (->> kb :pclauses (filter :assumption?)))))
+(defn has-inverse?
+  "Return true if the inverse of pc is already found in the pclauses."
+  [pc pclauses]
+  (let [inv-cnf (update-in (:cnf pc) [0 :neg?] not)]
+    (some #(= inv-cnf (:cnf %)) pclauses)))
 
-(defn inverse-facts
-  "Return a vector inverses of the facts used."
-  [kb]
-  (letfn [(pinv [pc]
-            (-> pc
-                (update-in [:cnf 0 :neg?] not)
-                (update :prob #(- 1.0 %))
-                (update :id #(-> % name (str "-inv") keyword))
-                (update :comment #(str % " | INV"))))]
-    (map pinv (->> kb :pclauses (filter :fact?)))))
-
-(defn inverse-rules
-  "Return a vector inverses of the assumptions and facts used."
-  [kb]
-  (letfn [(pinv [pc]
-            (-> pc
-                (update-in [:cnf 0 :neg?] not) ; Invert
-                (update :prob #(- 1.0 %))
-                (update :id #(-> % name (str "-inv") keyword))
-                (assoc :inverse-rule? true)
-                (update :comment #(str % " | INV"))))]
-    (map pinv (->> kb
-                   :pclauses
-                   (filter :rule?)))))
+(defn add-inverse-pclauses
+  "Add to pclauses as necessary for every fact, rule and assumption that doesn't already have an inverse.
+   Inverse facts may already be present owing to an fnot from a rule decomposition (into a proof-vec step).
+   It is not possible to declare an fnot by means of defkb, so there is no cases where a positive-literal
+   pclause would be added here, though the code would allow it if needed."
+  [pclauses]
+  (reduce (fn [res pc]
+            (if (has-inverse? pc pclauses)
+              (conj res pc)
+              (let [inv (cond-> pc
+                          true        (update-in [:cnf 0 :neg?] not)
+                          true        (update :prob #(- 1.0 %))
+                          true        (update :id #(-> % name (str "-inv") keyword))
+                          true        (update :comment #(str % " | INV"))
+                          (:rule? pc) (assoc :inverse-rule? true))]
+                (into res [pc inv]))))
+          []
+          pclauses))
 
 (defn fact-probability
   "Unify the argument form with the facts and return the probability.
@@ -384,12 +362,19 @@
         (throw (ex-info "No probability for unified form:" {:form form :truthy truthy})))
       (throw (ex-info "Not exactly one unifier:" {:unifies-with unifies-with :form form :truthy truthy})))))
 
+
+(defn indv2prop
+  "Calculate the probability of an individual, a vector of proposition-ids (PIDs)."
+  [kb indv]
+  )
+
+
 (defn prop-id2prob
   "Return a map from prop-id integers to probabilities for facts and rules used in a proof.
    This has both polarities of the literal and it has +/- z-vars set to 1.0.
    This is computed for each proof-id because the proofs get to the propositions in the prop-ids through different rules.
    Where a proposition isn't used by the proof (it is a fact and) it is unified with a KB fact."
-  [{:keys [proof-vecs prop-ids rules facts assumptions z-vars]} proof-id]
+  [{:keys [proof-vecs prop-ids rules facts assumptions z-vars] :as kb} proof-id]
   (letfn [(get-prob [step]
              (cond (:rule? step)       (-> (get rules (:rule-id step)) :prob)
                    (:fact? step)       (-> (get facts (:fact-id step)) :prob)
@@ -445,16 +430,67 @@
             result)
         result))))
 
+(declare summarize-individuals)
 (defn python-maxsat
   "Run a python RC2 MAXSAT problem. Return a vector describing results.
    The idea of running MAXSAT is to run a weighted satisifaction problem.
    N.B. Getting the cost of each individual solution is trivial; the true value of MAXSAT is realized
    when there are :protected clauses. In those cases it can solve a non-trivial satisfaction problem."
-  [{:keys [wdimacs z-var2proof-id] :as kb}]
+  [{:keys [wdimacs params] :as kb}]
+  (let [results (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40)] ; ToDo: 40?
+    (if (:all-individuals? params)
+      (summarize-individuals kb results)
+      (summarize-individuals kb results)))) ; ToDo: Of course, fix this.
+
+;;; Keep this around! It puts diagnostics into the solution (but doesn't summarize probabilities).
+#_(defn indv-probability-debug
+  "Return the probability of the individual.
+   An individual is a vector of proposition-ids or (- proposition-id).
+   Typically the individual is calculated by python maxsat (the :model returned).
+   soft-clauses are the structures containing WDIMACS strings and info from the pclause."
+  [indv soft-clauses]
+    (letfn [(applies-to? [indv s-vals] (every? #(== (nth indv (-> % abs dec)) %) s-vals))]
+      (reduce (fn [res sclause]
+                (if (->> sclause :applies-to (applies-to? indv))
+                  (conj res {:id (:id sclause) :prob (:prob sclause)})
+                  res))
+              []
+              soft-clauses)))
+
+(defn indv-probability
+  "Return the probability of the individual.
+   An individual is a vector of proposition-ids or (- proposition-id).
+   Typically the individual is calculated by python maxsat (the :model returned).
+   soft-clauses are the structures containing WDIMACS strings and info from the pclause."
+  [indv soft-clauses]
+    (letfn [(applies-to? [indv s-vals] (every? #(== (nth indv (-> % abs dec)) %) s-vals))]
+      (->> (reduce (fn [res sclause]
+                    (if (->> sclause :applies-to (applies-to? indv))
+                      (conj res (:prob sclause))
+                      res))
+                  [1.0]
+                  soft-clauses)
+           (apply *))))
+
+
+;;; I think summarize-proofs will go away!
+(defn summarize-individuals
+  "Calculate the probability of each individual.
+   Using :soft-clauses, collect the probabilities of all clauses for which the individual does not violate clause.
+   Multiply those together."
+  [{:keys [soft-clauses]} python-results]
+  (->> python-results
+       (map #(assoc % :prob (-> % :model (indv-probability soft-clauses))))
+       (sort #(> (:prob %1) (:prob %2)))
+       vec))
+
+(defn summarize-proofs
+  "Create a map of probabilities by proof.
+   python-results is a map with keys :model and :cost."
+  [{:keys [z-var2proof-id] :as kb} python-results]
   (let [proof-ids (->> kb :proof-vecs keys)
-        ;; map indexed by proof of pids and their inverse probability values.
         prob-map-by-proof-id (reduce (fn [res proof-id] (assoc res proof-id (prop-id2prob kb proof-id))) {} proof-ids)]
-    (as-> (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40) ?r
+    (as-> python-results ?r
       (mapv (fn [sol]
               (assoc sol :satisfies-proofs (-> (reduce (fn [res pid]
                                                          (if-let [proof-id (get z-var2proof-id pid)]
@@ -488,18 +524,18 @@
        :cnf
        (mapv (fn [{:keys [neg? pos]}] (if neg? (- pos) pos)))))
 
-(defn one-clause-wdimacs
-    "Return the argument pclause with :wdimacs set.
+(defn pclause-wdimacs
+    "Return a map of information for WDIMACS soft clauses, including a WDIMACS string and commented string.
      WDIMACS-style MAXSAT penalizes instantiations that violate the (disjunctive) clause.
      A clause is violated if the instance disagree with the clause on ALL variables.
      Thus the WDIMACS clause should be viewed as the 'positive' (but disjunctive) form to which the instantiation is tested.
      Also, penalty increases as probability decreases (cost = -log(Prob)).
      The option :fancy-threshold just means that there are spaces in the string where predicates aren't used;
      the idea being when there's room, keep the numbers lined up for pretty formatting."
-    [kb pclause & {:keys [commented? data-only? fancy-threshold] :or {fancy-threshold 10}}]
+    [kb pclause & {:keys [fancy-threshold] :or {fancy-threshold 10}}]
     (when (> (:prob pclause) default-max-clause-probability)
       (log/warn "Consider declaring this clause a hard clause (high probability):" pclause))
-    (let [cost ((-> kb :vars :cost-fn) (:prob pclause))
+    (let [cost ((-> kb :params :cost-fn) (:prob pclause))
           pid-vec (pclause2pid-vec pclause) ; A vector of natural numbers or their negatives.
           used?   (set pid-vec)
           clause-vals (if (< (-> kb :prop-ids count) fancy-threshold)
@@ -512,10 +548,16 @@
                         ;; If too many prop-ids, then only line up comments.
                         (let [largest (apply max (map #(-> % :cnf count) (:pclauses kb)))]
                           (into pid-vec (repeat (- largest (count pid-vec)) " "))))]
-      (cond
-        commented? (cl-format nil "~5A~{~5d~} c ~A" cost (conj clause-vals 0) (or (:comment pclause) ""))
-        data-only? {:cost cost :pids (filter number? clause-vals)}
-        :else (cl-format nil "~5A~{~5d~}" cost (conj clause-vals 0)))))
+      (cond-> {}
+        (:rule? pclause)       (assoc  :rule? true)
+        (:fact? pclause)       (assoc  :fact? true)
+        (:assumption? pclause) (assoc  :assumption? true)
+        true                   (assoc  :applies-to (filterv number? clause-vals))   ; ToDo: Is filter necessary? Why?
+        (:rule? pclause)       (update :applies-to (fn [v] (update v 0 #(- %))))    ; This allows us to compare the individual for exact match.
+        true                   (assoc  :cost cost)
+        true                   (assoc  :str-commented (cl-format nil "~5A~{~5d~} c ~A" cost (conj clause-vals 0) (or (:comment pclause) "")))
+        true                   (assoc  :str           (cl-format nil "~5A~{~5d~}" cost (conj clause-vals 0)))
+        true                   (assoc  :prob          (:prob pclause)))))
 
 (defn z-vars
   "Return a vector of the Tseitin z-vars for the problem.
@@ -534,50 +576,51 @@
 
 (defn commented-hclause
   "Add some text to the end for the clause for use with reporting (for debugging)."
-  [base-str clause-type clause kb]
+  [base-str clause-type clause {:keys [query prop-ids z-var2proof-id]}]
   (let [base-str (clojure.string/trim-newline base-str)
         solution-zvar (apply max (map abs clause))
         min-elem      (apply min (map abs clause))
-        index2pred (-> kb :prop-ids sets/map-invert)] ; This for type-3 and -4; there are just two elements.
+        index2pred (sets/map-invert prop-ids)]
     (case clause-type
-      :type-0 (cl-format nil "~A c Must answer the query ~A.~%" base-str (:query kb))
+      :type-0 (cl-format nil "~A c Must answer the query ~A.~%" base-str query)
       :type-1 (str base-str " c Require at least one of these solutions (defined by the other hard clauses).\n")
-      :type-2 (str base-str (cl-format nil " c Sol ~A (~A) implies ~A to be ~A.~%" ; ToDo: (report!?!) format didn't work here!
+      :type-2 (str base-str (cl-format nil " c Sol ~A (~A) implies ~A is ~A.~%"
                                        solution-zvar
-                                       (get (:z-var2proof-id kb) solution-zvar)
+                                       (get z-var2proof-id solution-zvar)
                                        (-> min-elem abs index2pred)
-                                       (if (pos? min-elem) "true" "false")))
-      :type-3 (str base-str " c Optional, (needs thought!).\n")
-      :type-4 (str base-str (cl-format nil " c ~A implies Sol ~A. (optional :global-disjoint?.)~%"
-                                       (-> min-elem abs index2pred) solution-zvar)))))
+                                       (if (pos? min-elem) "true" "false")))))) ; <=========================================================== WRONG.
 
 (defn hard-clause-wdimacs-string
   "Return a map of hard clause information that includes a compact string of the
    hard constraints in wdimacs format.
    Option :fancy-threshold is for nice formatting; it puts spaces things out nicely."
-  [kb clause-vecs {:keys [commented? fancy-threshold] :or {fancy-threshold 10}}]
-  (let [pclauses  (remove :remove? (:pclauses kb))
-        cost-fn   (-> kb :vars :cost-fn)
+  [{:keys [pclauses params prop-ids] :as kb} clause-vecs {:keys [commented? fancy-threshold] :or {fancy-threshold 10}}]
+  (let [cost-fn   (:cost-fn params)
+        all-indv? (:all-individuals? params)
         hard-cost (inc (apply + (map #(-> % :prob cost-fn) pclauses)))
         zids      (:z-vars kb)
         wdimacs-string (atom "")]
-    (if (< (-> kb :prop-ids count) fancy-threshold)
-      (doseq [k (keys clause-vecs)]
-        (doseq [clause (get clause-vecs k)]
-          (let [tuple (set clause)
-                valus (reduce (fn [vs ix] (cond (tuple ix)     (conj vs ix)
-                                                (tuple (- ix)) (conj vs (- ix))
-                                                :else (conj vs " ")))
-                              []
-                              (range 1 (inc (last zids))))
-                base-str  (cl-format nil "~7A~{~5d~}~%" hard-cost (conj valus 0))]
-            (swap! wdimacs-string str (if commented? (commented-hclause base-str k clause kb) base-str)))))
-      (doseq [clause clause-vecs] ; don't bother to pretty print it.
-        (swap! wdimacs-string str (cl-format nil "~7A~{~5d~}~%" hard-cost (conj (vec (sort-by #(Math/abs %) clause)) 0)))))
+    (when-not all-indv?
+      (if (< (count prop-ids) fancy-threshold)
+        (doseq [k (keys clause-vecs)]
+          (doseq [clause (get clause-vecs k)]
+            (let [tuple (set clause)
+                  valus (reduce (fn [vs ix] (cond (tuple ix)     (conj vs ix)
+                                                  (tuple (- ix)) (conj vs (- ix))
+                                                  :else (conj vs " ")))
+                                []
+                                (range 1 (inc (last zids))))
+                  base-str  (cl-format nil "~7A~{~5d~}~%" hard-cost (conj valus 0))]
+              (swap! wdimacs-string str
+                     (if commented?
+                       (commented-hclause base-str k clause kb)
+                       base-str)))))
+        (doseq [clause clause-vecs] ; don't bother to pretty print it.
+          (swap! wdimacs-string str (cl-format nil "~7A~{~5d~}~%" hard-cost (conj (vec (sort-by #(Math/abs %) clause)) 0))))))
     {:h-wdimacs @wdimacs-string
      :hard-cost hard-cost
-     :n-hclauses (count clause-vecs)
-     :n-vars (last zids)}))
+     :n-hclauses (if all-indv? 0 (count clause-vecs))
+     :n-vars     (if all-indv? (->> prop-ids vals (apply max)) (last zids))}))
 
 (defn hard-clause-wdimacs
   "Create the wdimacs string for hard clauses using a Tseitin-like transformation
@@ -585,65 +628,44 @@
    Specificaly, there are 2*num-props + (num-solutions)(num-solutions-1)/2 + 1 clauses
    divided among several types as follows:
      - type-0: optionally, where :all-individuals? is false (the default) the query must be true.
-     - type-1: mandatory, 1 clause with all the Z variables, requiring at least one of the solutions.
-     - type-2: mandatory, implications for rules that have as their head the query; this DEFINES the z-vars.
+     - type-1: :all-individuals?=false, 1 clause with all the Z variables, requiring at least one of the solutions.
+     - type-2: :all-individuals?=false, implications for rules that have as their head the query; this DEFINES the z-vars.
                z-var => <a top-level rule RHS pred>, written as NOT z-var OR <the top-level rule RHS pred>
-               for every pred in every rule that is top level (has the query var as its head).
-     - type-3: optionally, (num-solutions)(num-solutions-1)/2 (combinations of 2) clauses with with pairs of Z variables,
-               requiring no more than one solution to be true.
-     - type-4: optionally, roughly num-props clauses that require that if the proposition is true, then so is every solutions using it.
-               ('IF prop then Z' written as -prop V Z) " ; ToDo: This is :globally-disjoint?, and I think it should be eliminated!
-  [kb commented?]
-  (let [pids      (:prop-ids kb) ; A map indexed by the predicate, with integer values.
-        pids-inv  (sets/map-invert pids)
-        prop-ids  (vals pids)
-        prf-vecs  (->> kb :proof-vecs vals (map :pvec-props))
-        zids      (:z-vars kb)
-        z2prop    (zipmap zids prf-vecs) ; These 'define' the Zs: index is a z-var; value is the rule RHS (vector of preds) that solved it.
-        prop2z    (reduce (fn [m prop]
-                            (let [res (reduce-kv (fn [res z v] (if (some #(= % prop) v) (conj res z) res)) [] z2prop)]
-                              (if (not-empty res)
-                                (assoc m prop res)
-                                m)))
-                          {}
-                          (reduce into [] prf-vecs))
-        all-indv? (-> kb :params :all-individuals?)
-        query-int (-> pids (get (:query kb)))
+               for every pred in every rule that is top level (has the query var as its head)."
+  [{:keys [params prop-ids proof-vecs z-vars query] :as kb} commented?]
+  (let [prf-vecs  (->> proof-vecs vals (map :pvec-props)) ; <=========================================================== pvec-props needs polarity/fact/not
+        z2prop    (zipmap z-vars prf-vecs) ; These 'define' the Zs: index is a z-var; value is the rule RHS (vector of preds) that solved it.
+        all-indv? (:all-individuals? params)
+        query-int (get prop-ids query)
         type-0    (if all-indv? [] (-> query-int vector vector))
-        type-1    (if all-indv? [] (vector zids))
+        type-1    (if all-indv? [] (vector z-vars))
         type-2    (if all-indv? []
-                      (cond->> (reduce-kv (fn [res z-var preds] (into res (mapv #(conj [(- z-var)] (get pids %)) preds))) [] z2prop) ; ToDo: Implement all-individuals.
-                        true                                  (mapv (fn [vec] (sort vec))) ; pprint order the predicates in the clause.
-                        true                                  (sort-by #(apply max (map abs %)))))    ; pprint order the clause by rule they address.
-        type-3    [] ;(mapv   (fn [[x y]] (vector (- x) (- y))) (combo/combinations zids 2)) ; ToDo: Needs thought!
-        type-4    (if (-> kb :params :global-disjoint?)
-                    (->> (map (fn [prop-id] (conj (z-using (pids-inv prop-id) prop2z) (- prop-id))) prop-ids)
-                         (filter #(> (count %) 1)) ; ToDo: Not using anything; might be a mistake.
-                         (mapv (fn [vec] (sort-by #(Math/abs %) vec)))
-                         (sort-by #(-> % first Math/abs)))
-                    {})]
-    (hard-clause-wdimacs-string kb {:type-0 type-0 :type-1 type-1 :type-2 type-2 :type-3 type-3 :type-4 type-4}
+                      (->> (reduce-kv (fn [res z-var preds] (into res (mapv #(conj [(- z-var)] (get prop-ids %)) preds))) [] z2prop)
+                           (mapv (fn [vec] (sort vec))) ; pprint order the predicates in the clause.
+                           (sort-by #(apply max (map abs %)))))]  ; pprint order the clause by rule they address.
+    (hard-clause-wdimacs-string kb
+                                {:type-0 type-0 :type-1 type-1 :type-2 type-2}
                                 {:commented? commented?})))
 
 (defn wdimacs-string
   "Create the wdimacs problem (string) from the pclauses and the hard-conjunction.
    How to read the string: instances that are exact opposites acquire the penalty."
-  [kb & {:keys [commented?]}]
-  (let [pclauses  (remove :remove? (:pclauses kb))
-        {:keys [h-wdimacs
+  [{:keys [soft-clauses] :as kb} & {:keys [commented?]}]
+  (let [{:keys [h-wdimacs
                 hard-cost
                 n-hclauses
                 n-vars]} (hard-clause-wdimacs kb commented?)
-        p-wdimacs (cond->> (map #(one-clause-wdimacs kb % :commented? commented?) pclauses)
-                    commented? (map (fn [num line] (cl-format nil "~2A: ~A" num line))
-                                    (range 1 (-> pclauses count inc))))
-        result (cl-format nil "p wcnf ~A ~A ~A~%~A~%~{~A~^~%~}"
-                          n-vars                           ; number of variables in the problem
-                          (+ (count pclauses) n-hclauses)  ; number of equations in the problem
-                          hard-cost
-                          h-wdimacs   ; all the hard clauses
-                          p-wdimacs)] ; all the soft clauses
-    result))
+        p-wdimacs (if commented?
+                    (->> soft-clauses
+                         (map :str-commented)
+                         (map (fn [num line] (cl-format nil "~2A: ~A" num line)) (range 1 (-> soft-clauses count inc))))
+                    (map :str soft-clauses))]
+    (cl-format nil "p wcnf ~A ~A ~A~%~A~%~{~A~^~%~}"
+               n-vars                               ; number of variables in the problem
+               (+ (count soft-clauses) n-hclauses)  ; number of equations in the problem
+               hard-cost
+               h-wdimacs    ; all the hard clauses concatenated
+               p-wdimacs))) ; all the soft clauses individually
 
 (defn maps-agree?
   "Return true if the values for all keys in m1 match those in m2
@@ -701,45 +723,6 @@
        (filterv #(-> % :form collect-vars empty?))
        (mapv :subs)))
 
-(defn make-not-head-pclauses
-  "Create all the pclauses (maps) for the argument rule and ground facts
-   where these facts are the proposition forms of prop-id."
-  [nhrule gfacts]
-  (let [subs (query-cform (:tail nhrule) gfacts)]
-    (->> subs
-         (reduce (fn [pcs sub]
-                   (let [cnf (uni/subst (:cnf nhrule) sub)]
-                     (conj pcs
-                           {:cnf cnf
-                            :prob (:prob nhrule)
-                            :type :rule
-                            :id (-> (:id nhrule) name (str "-nh") keyword)
-                            :comment (str "NH " (:id nhrule) " " sub)})))
-                 [])
-         ;; If the nhrule is about anti-symmetry only need one of the bindings.
-         (group-by #(-> % :cnf set))
-         (reduce-kv (fn [pcs _ v] (conj pcs (first v))) []))))
-
-(defn unique-preds
-  [pclauses]
-  (reduce (fn [u c] (into u (map :pred c)))
-          #{}
-          (map :cnf pclauses)))
-
-;;; ToDo: Is this even necessary since form2lit does the work and have rule2cnf? (And is it screwing things up.)
-(defn add-not-head-pclauses
-  "Return new pclauses for rules with NOT in the head.
-   Purposes of these rules include
-     (1) enforcing disjointed types of individuals, and
-     (2) enforcing anti-symmetric relations, for example, {:head (not (biggerSet ?x ?y)) :tail [(biggerSet ?y ?x)]}
-   This is only used in rather unusual circumstances, since here the rule does not concern causality.
-   (You can't provide an explanation for why something didn't happen simply by putting a NOT in the head.)
-   Also there may be a race condition in inference around these kinds of issues."
-  [kb]
-  (let [not-heads (filter #(-> % :head form2lit :neg?) (->> kb :rules vals))
-        ground-facts (->> kb :pclauses unique-preds)]
-    (mapcat #(make-not-head-pclauses % ground-facts) not-heads)))
-
 (defn add-id-to-comments
   "Each pclause has an id and a comment string; put the id at the front of the comment string."
   [pclauses]
@@ -765,9 +748,9 @@
 
 ;;; ToDo: This projects out parts of the KB, which is a source of bugs.
 (defn info-for-game
-  "Produce a map of properties to merge into the kb to adjust it for a game.
-   A game is a collection of proof-ids."
-  [kb game & {:keys [pretty-analysis?]}]
+  "Produce a kb-like object that is a projection of the kb for the list of proof-ids given the the argument game.
+   Add game-specific properties such as prop-ids, z-var,  and wdimacs."
+  [kb game]
   (as-> {} ?game-kb
     (assoc ?game-kb :game game)
     (assoc ?game-kb :vars (:vars kb))
@@ -775,7 +758,7 @@
     (assoc ?game-kb :query (:query kb))
     (assoc ?game-kb :rules (:rules kb))
     (assoc ?game-kb :facts (:facts kb))
-    ;; Assumptions are sorta made on-the-spot!
+    ;; Assumptions are created by proofs, so they are found in pclauses. Like rules and facts, they need :form.
     (assoc ?game-kb :assumptions (reduce (fn [res a] (assoc res (:id a) a))
                                          {}
                                          (->> kb :pclauses (filter :assumption?) (remove #(-> % :cnf first :neg?)))))
@@ -793,33 +776,31 @@
     (update ?game-kb :pclauses (fn [pcs] (mapv #(set-pclause-prop-ids
                                                  % (:prop-ids ?game-kb) game)
                                                pcs)))
-    (assoc ?game-kb :z-vars (z-vars ?game-kb))
-    (assoc ?game-kb :z-var2proof-id (zipmap (:z-vars ?game-kb) (-> ?game-kb :proof-vecs keys)))
-    (assoc ?game-kb :wdimacs (wdimacs-string ?game-kb))
-    (reset! diag ?game-kb) ; Might be good to keep this one around.
-    (if pretty-analysis?
-      (as-> ?game-kb ?g2
-        (update ?g2 :pclauses (fn [pcs] (mapv (fn [pc] ; This sorting for pretty wdimacs?
-                                                (update pc :cnf
-                                                        (fn [cnf] (vec (sort-by #(-> % :pred :pos) cnf))))) pcs)))
-        (update ?g2 :pclauses sort-clauses)
-        (assoc  ?g2 :wdimacsc (wdimacs-string ?g2 :commented? true))) ; Comments for this line.
-      ?game-kb)))
+    (assoc  ?game-kb :z-vars (z-vars ?game-kb))
+    (assoc  ?game-kb :z-var2proof-id (zipmap (:z-vars ?game-kb) (-> ?game-kb :proof-vecs keys)))
+    (update ?game-kb :pclauses #(->> % (remove :remove?) (sort-by :id) vec)) ; ToDo: Remove not necessary?
+    (assoc  ?game-kb :soft-clauses (mapv #(pclause-wdimacs ?game-kb %) (:pclauses ?game-kb)))
+    (update ?game-kb :soft-clauses (fn [clauses]
+                                     (mapv (fn [sc id] (assoc sc :id id))
+                                           clauses
+                                           (map #(str "clause-" %) (range 1 (-> clauses count inc))))))
+    (assoc  ?game-kb :wdimacs (wdimacs-string ?game-kb))
+    (reset! diag ?game-kb))) ; Might be good to keep this one around.
 
 (def ngames-played (atom 0))
 
 (defn run-one
   ":pclauses has been prepared to run the MAXSAT problem.
    Create the wdimacs and run python-maxsat, setting :mpe."
-  [kb game & {:keys [pretty-analysis?]}]
+  [kb game]
   (swap! ngames-played inc)
-  (let [kb (info-for-game kb game :pretty-analysis? pretty-analysis?)]
-    ;; Take what you want from this result.
+  (let [kb (info-for-game kb game)]
     {:mpe (python-maxsat kb)
+     :soft-clauses (:soft-clauses kb)
+     :z-var2proof-id (:z-var2proof-id kb)
      :z-vars  (:z-vars kb)
      :pclauses (:pclauses kb)
      :wdimacs (:wdimacs kb)
-     :wdimacsc (if pretty-analysis? (:wdimacsc kb) "")
      :prop-ids (:prop-ids kb)}))
 
 (defn best-loser
@@ -844,7 +825,7 @@
               kb (info-for-game kb game)]
           ;(log/info "Running game" game)
           (recur (rest groups)
-                 (let [res (:mpe (run-one kb game :pretty-analysis? false))
+                 (let [res (:mpe (run-one kb game))
                        [new-winners new-losers] (split-at num-kept (map :proof-id res))]
                    (-> result
                        (update :winners into new-winners)
@@ -910,7 +891,7 @@
   (reset! ngames-played 0)
   (if (<= (-> kb :proof-vecs count) max-together)
     (let [game (-> kb :proof-vecs keys)]
-      (merge kb (run-one kb game :pretty-analysis? true)))
+      (merge kb (run-one kb game)))
     (let [results (run-tournament kb game-size num-kept final-size :loser-fn loser-fn)]
       (if return-just-winners? ; for debugging
         (->> results :mpe (mapv :proof-id))

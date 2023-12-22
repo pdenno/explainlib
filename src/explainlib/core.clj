@@ -6,100 +6,74 @@
    [clojure.set                  :as sets]
    [clojure.spec.alpha           :as s]
    [clojure.string]
+   [explainlib.extra             :as dev] ; ToDo: How do we make this present only in dev environment?
    [explainlib.maxsat            :as maxsat]
    [explainlib.specs             :as specs]
    [explainlib.util              :as util :refer [unify* fact-not? varize collect-vars ground? cvar? reapply-fnot-meta]]
    [taoensso.timbre              :as log]))
 
 ;;; ToDo:
-;;;  1) Reconsider use of both lits and forms. (Choose one, use meta for the other???)
+;;;  1) Implement :protected.
+;;;  2) Remove pclause.id, they aren't unique and we don't need them.
+;;;  3) Check if query can be answered by facts.
 
-;;; ToDo: All of these need definition
 (def default-elimination-threshold       "Remove certain proofs when there are more than this number. See fn winnow-by-priority" 400)
 (def default-black-listed-preds          "Gives a warning when used as an assumption; uses default probability."                 #{}) ; ToDo: Useful?
 (def default-black-list-probability      "Probability for black-listed assumptions"                                            0.001) ; ToDo: Useful?
 (def default-assumption-probability      "Assumptions should have their own probability. Warns when this is used."             0.100)
 (def default-requires-evidence?          "A set of predicates symbols for which there is a warning if using an assumption."      #{})
 (def default-all-individuals?            "Compute all individuals, not just those that have the query form true."              false)
-;;; ToDo: This next one is temporary until I translates such clauses to hard clauses.
 
 ;;; For debugging
 (def diag  (atom {}))
 (defn break-here [obj]  (reset! diag obj))
 
 ;;; =========================== Definitions. See also specs.clj ====================================================================================================
-;;; facts            = Predicates with associated probability.
-;;; observations     = Predicates without associated probability. These are used to simply pclauses. See use of :remove? in several places.
-;;; assumptions      = Predicates with associated probability that will be generated to complete the RHS of a rule in the absence of suitable facts or observations.
-;;; skolem           = A predicate role that is generated where the a does not otherwise have a binding; it has existential quantification.
-;;; ground fact      = A fact that has no unbound roles, skolems allowed.
-;;; literal          = A predicate or its negative (not).
-;;;                    N.B. currently in the code 'lit' often refers to a CNF-style {:pred (psym r1...rn) :neg? true}, whereas 'form' means (not (psym r1...rn)).
-;;; non-empty clause = A clause containint at least one literal
-;;; horn clause      = A non-empty disjunctive clause with at most one positive literal.
-;;; definite clause  = A non-empty disjunctive clause with exactly one positive literal.
-;;; pclause          = A disjunctive clause resulting from the use of a fact, assumption, or rule in a proof or its inverse.
-;;;                    The pclause represents the intent of the clause and is used directly to define a weighted MAXSAT constraint, it is not inverted for this purpose.
-;;;                    A pclause has CNF, probability and (for debugging) provenance information.
-;;;                    The probability of the inverse is 1 - P, where P is the probability of the original clause.
-;;; query-form       = A positive literal which is the subject of a probabilistic 'explanation'.
-;;; raw proof        = A (typically deeply) nested structure describing use of facts, assumptions and inference to 'explain' the query form.
-;;; proof-vec        = A flattened version of a raw proof. It contains :steps and :pvec-props.
-;;; game             = A collection of proofs used in a MAXSAT analysis. When a query results in many proofs, subsets of all games compete in a tournament.
-;;; factual-not      = A rule can have 'nots' in them; either
-;;;                       RHS: (not (bigger-set ?y ?x)) := (bigger-set ?x ?y) or
-;;;                       LHS: (alarm ?loc) := (not (burglary ?loc)) (earthquake ?loc)
-;;;                    Idea of a factual not is to maintain the fact as a simple list by simply adding :fact/not before the predicate, e.g. (:fact/not bigger-set ?y ?x).
-;;;                    To these forms is added meta {:factual-not? true}. These measures are to distinguish such predicates from generated negative literals e.g. in pclauses.
-;;;                    Note that (:fact/not ...)-style propositions are also used in pclauses as are their :neg? (Their ordinary form is the positive (:neg? false) and
-;;;                    {:cnf [{:pred (:fact/not pred-sym...) :neg? true}]} is allowed and is the double negative of the base proposition (pred-sym ...).
-;;;                    Use of :neg? is restricted to pclauses for CNF, not a thing for generation of proofs.
-
-(defn good-fnot-meta? ; ToDo: Move to env/dev?
-  "Walk through a structure and return it untouched if the the fnot propositions have the necessary metadata."
-  ([obj] (good-fnot-meta? obj nil))
-  ([obj tag]
-   (letfn [(c4fn [x]
-             (cond (map? x)                                    (reduce-kv (fn [m k v] (assoc m (c4fn k) (c4fn v))) {} x)
-                   (vector? x)                                 (mapv c4fn x)
-                   (and (seq? x) (= :fact/not (first x)))      (if (s/valid? ::specs/proposition x)
-                                                                 x
-                                                                 (throw (ex-info "fnot proposition does not have meta:" {:tag tag :specific x :part-of obj})))
-                   (seq? x)                                   (map c4fn x)
-                   :else                                       x))]
-     (doall (c4fn obj)))))
-
-;;; ToDo: Make this go away here. Should only be used in maxsat.clj
-(defn form2lit
-  "Return a literal. It looks like {:pred (some form) :neg? true|false}.
-   Handles only predicates and negated predicates."
-  [form]
-  (s/assert ::specs/proposition form)
-  (let [form (varize form)]  ; BTW varize preserves fnot meta.
-    (if (-> form meta :factual-not?)
-      {:pred form :neg? false} ; factual-not polarity untouched. (See definition of factual-not above.)
-      {:pred form :neg? false})))
-
-;;; ToDo: This goes away. There will be one in maxsat.
-(defn lit2form
-  "Return the literal list form for the argument literal map.
-   Note that this doesn't care about polarity. :neg? is a pclause thing."
-  [lit]
-  (let [pred (:pred lit)]
-    (if (= :fact/not (first pred))
-      (with-meta pred {:factual-not? true})
-      pred)))
-
-#_(defn lit2form
-  "Return the literal list form for the argument literal map."
-  [lit]
-  (varize
-   (if (:neg? lit)
-     (with-meta (list :fact/not (:pred lit)) {:factual-not? true})
-     (:pred lit))))
+;;; facts               = Predicates with associated probability.
+;;; observations        = Predicates without associated probability. These are used to simply pclauses. See use of :remove? in several places.
+;;; assumptions         = Predicates with associated probability that will be generated to complete the RHS of a rule in the absence of suitable facts or observations.
+;;; skolem              = A predicate role that is generated where the a does not otherwise have a binding; it has existential quantification.
+;;; ground fact         = A fact that has no unbound roles, skolems allowed.
+;;; literal             = A predicate or its negative (not).
+;;;                       N.B. currently in the code 'lit' often refers to a CNF-style {:pred (psym r1...rn) :neg? true}, whereas 'form' means (not (psym r1...rn)).
+;;; non-empty clause    = A clause containint at least one literal
+;;; horn clause         = A non-empty disjunctive clause with at most one positive literal.
+;;; definite clause     = A non-empty disjunctive clause with exactly one positive literal.
+;;; prop-id             = An non-zero integer representing a proposition or its negation.
+;;; props-ids           = a map keyed by every proposition in a proof relating it to a positive integer, the prop-id.
+;;; CNF                 = clause normal form (or conjunctive normal form) where the conjunction referred to is of all over all the disjunctive clauses that are 1-1 with rules and facts.
+;;;                       Note that a pclause's :cnf is ordered: If the :cnf represents a rule, the rule head is the first map in the vector. (See example below).
+;;; pclause             = A disjunctive clause (CNF) resulting from the use of a fact, assumption, or rule in a proof or its inverse.
+;;;                       The pclause represents the intent of CNF and the CNF is used directly to define a weighted MAXSAT constraint, it is not inverted for this purpose.
+;;;                       For example, with prop-ids = {(cee foo) 1, (dee foo) 2}:
+;;;                            (1) a fact (cee ?x), with p=0.300 may be instantiated as (cee foo) in a proof.
+;;;                                -- has pclause: {:prob 0.3, :fact? true,  :cnf [{:pred (cee foo), :neg? false, :pos 1}], :comment "fact-1 (cee foo)", :used-in #{:proof-1}}
+;;;                                -- has wdimacs: "36       1         0 c fact-1 (cee foo)"
+;;;                            (2) a rule (dee ?x-r1) :- (cee ?x-r1)  with p=0.200 means "(cee whatever) implies (dee whatever)."
+;;;                                -- has pclause:  {:prob 0.2 :cnf [{:pred (dee foo), :neg? false, :pos 2} {:pred (cee foo), :neg? true, :pos 1}],   :comment "rule-1 :rule-1 {?x-r1 foo} (dee foo)",}
+;;;                                -- has wdimacs:  "22      -1    2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo)"
+;;;                                   which means that if an individual violates this rule by having [1 -2] (cee is true but not dee) it picks up the small penalty of 22.
+;;;                                   The penalty is small because the the rule only holds p=0.200 of the time.
+;;;                       In addition to what is shown here a pclause has proof provenance information and variable binding information.
+;;;                       The probability of the inverse is 1 - P, where P is the probability of the original clause.
+;;; pclause.applies-to  = A pclause has property :applies-to, which is a vector of the prop-ids for which fact or rule holds.
+;;;                       For example, the rule above, (dee ?x-r1) :- (cee ?x-r1) applies to an individual with [1 2] in its model and therefore the probability
+;;;                       of an individual
+;;; query-form          = A positive literal which is the subject of a probabilistic 'explanation'.
+;;; raw proof           = A (typically deeply) nested structure describing use of facts, assumptions and inference to 'explain' the query form.
+;;; proof-vec           = A flattened version of a raw proof. It contains :steps and :pvec-props.
+;;; game                = A collection of proofs used in a MAXSAT analysis. When a query results in many proofs, subsets of all games compete in a tournament.
+;;; factual-not         = A rule can have 'nots' in them; either
+;;;                          RHS: (not (bigger-set ?y ?x)) := (bigger-set ?x ?y) or
+;;;                          LHS: (alarm ?loc) := (not (burglary ?loc)) (earthquake ?loc)
+;;;                       Idea of a factual not is to maintain the fact as a simple list by simply adding :fact/not before the predicate, e.g. (:fact/not bigger-set ?y ?x).
+;;;                       To these forms is added meta {:factual-not? true}. These measures are to distinguish such predicates from generated negative literals e.g. in pclauses.
+;;;                       Note that (:fact/not ...)-style propositions are also used in pclauses as are their :neg? (Their ordinary form is the positive (:neg? false) and
+;;;                       {:cnf [{:pred (:fact/not pred-sym...) :neg? true}]} is allowed and is the double negative of the base proposition (pred-sym ...).
+;;;                       Use of :neg? is restricted to pclauses for CNF, not a thing for generation of proofs.
 
 
-(defn skol-var
+(defn skol-var!
   "'Skolemize' the argument variable."
   [kb var]
   (let [num-skolems (-> kb :vars :num-skolems)]
@@ -111,14 +85,11 @@
   "Replace free variables in the form with skolem constants."
   ([kb form] (skolemize kb form {}))
   ([kb form subs] ; Not sure what value this has any more.
-   (let [{:keys [pred neg?]} (form2lit form)
-         subs (if (empty? subs) {} subs)
-         pred (uni/subst pred subs)
-         vars (collect-vars pred)
-         subs (zipmap vars (map #(skol-var kb %) vars))]
-     {:form
-      (lit2form {:pred (uni/subst pred subs) :neg? neg?})
-      :subs subs})))
+   (let [form (uni/subst form subs)
+         vars (collect-vars form)
+         subs (merge (zipmap vars (doall (map #(skol-var! kb %) vars))) subs)
+         form (uni/subst form subs)]
+     {:form form :subs subs})))
 
 (defn name2suffix
   "Return a suffix good for use with the argument name (a keyword)"
@@ -169,15 +140,9 @@
    returning a map indexed by a sequential name given to each rule."
   [facts]
   (reduce-kv (fn [fs k v]
-               (let [suffix   (name2suffix k)
-                     fact (-> v
-                              (assoc  :id  k)
-                              #_(assoc  :cnf (-> v :fact form2lit vector))
-                              #_(update :cnf #(varize % suffix))
-                              #_(dissoc :fact))]
+               (let [fact (assoc v :id  k)]
                  (s/valid? ::specs/fact fact)
-                 (-> fs
-                     (assoc k fact))))
+                 (-> fs (assoc k fact))))
              {}
              (zipmap (map #(-> (str "fact-" %) keyword) (range 1 (-> facts count inc)))
                      (sort-by #(-> % :form first name) facts))))
@@ -228,7 +193,7 @@
   (let [invalid-keys (clojure.set/difference (-> args keys set) valid-kb-keys)]
     (if (not-empty invalid-keys)
       (throw (ex-info (str "Invalid keys in defkb: " invalid-keys) {:invalid invalid-keys}))
-      (let [rw-rules (mapv rewrite-rule-factual-nots rules)]
+      (let [rw-rules (mapv rewrite-rule-factual-nots rules)] ; ToDo: Still needed. Why?
         `(def ~name (identity  {:doc-string ~doc-string
                                 :vars {:assumption-count (atom 0)
                                        :num-skolems (atom 0)}
@@ -246,11 +211,6 @@
                                 :facts '~facts
                                 :assumptions-used (atom {})
                                 :observations '~observations}))))))
-
-
-(defkb _blank-kb "This KB is used to define the following default- vars.")
-(def default-params (-> _blank-kb :params))
-(def default-vars   (-> _blank-kb :vars))
 
 (declare reset-scope-stack)
 (defn clear!
@@ -302,7 +262,7 @@
                                                     true                   (reapply-fnot-meta))))))
             @result)))))))
 
-;;; ToDo: Maybe move the body of this into explain. Thing is, the comment seems nice!
+;;; We didn't factor this out because it is a good place to stop for debugging.
 (defn flatten-proofs
   "Collect vectors describing how each proof navigates :raw-proofs to some collection of
    grounded LHSs, facts and assumptions.
@@ -311,11 +271,10 @@
   [raw-proofs]
   (mapcat flatten-proof (:proofs raw-proofs)))
 
-;;; ToDo: Is this reflective of a flaw in the user's KB? Unnecessary?
 (defn winnow-by-assumption
   "Remove all proofs containing predicate symbols in (:eliminate-by-assumptions kb) that are used as assumptions."
   [pvecs assume-set]
-  (good-fnot-meta? pvecs "winnow-by-assumption (1)")
+  ;;(dev/good-fnot-meta? pvecs "winnow-by-assumption (1)")
   (if-let [elim (not-empty assume-set)]
     (let [start-count (count pvecs)
           eliminate? (set elim)
@@ -346,10 +305,10 @@
    Add :pvec-props, which lists the propositions used in the proof.
    Return a map keyed by a newly created name for the proof, for example, :proof-1, etc."
   [proof-vecs observations+ {:keys [elimination-threshold elimination-priority eliminate-by-assumptions]}]
-  (good-fnot-meta? proof-vecs "winnow-proofs (1)")
+  ;;(dev/good-fnot-meta? proof-vecs "winnow-proofs (1)")
   (let [result (as-> proof-vecs ?pvecs
                  (winnow-by-assumption ?pvecs eliminate-by-assumptions)
-                 (good-fnot-meta? ?pvecs "winnow-proofs (1.1)")
+                 ;;(dev/good-fnot-meta? ?pvecs "winnow-proofs (1.1)")
                  (winnow-by-priority ?pvecs elimination-threshold elimination-priority)
                  (zipmap (map #(keyword (str "proof-" %)) (range 1 (inc (count ?pvecs)))) ?pvecs)
                  (reduce-kv (fn [res id pvec] (assoc res id {:proof-id id :steps pvec})) {} ?pvecs)
@@ -359,7 +318,6 @@
                                      (assoc pvec-map :pvec-props
                                             (->> (remove (fn [pred] (some #(= pred %) observations+))
                                                          (->> pvec-map :steps (map :form)))
-                                                 (map #(or (fact-not? %) %)) ; <=============================================================== Wrong, I think.
                                                  distinct
                                                  vec))))
                             {} ?pvecs))]
@@ -381,8 +339,8 @@
   "Unify each of form in the fact-set against the tail (they are in the same order).
    If the form has a cvars return them as binding to themselves."
   [fact-set tail]
-  ;(good-fnot-meta? fact-set "bindings+ fact-set")
-  ;(good-fnot-meta? tail "bindings+ tail")
+  ;;(dev/good-fnot-meta? fact-set "bindings+ fact-set")
+  ;;(dev/good-fnot-meta? tail "bindings+ tail")
   (map (fn [form fact]
          (let [cvars (collect-vars form)
                binds (unify* form fact)
@@ -410,12 +368,7 @@
               (if (not still-true?)
                 false
                 (let [common-keys (filter #(contains? m2 %) (keys m1))]
-                  (every? #(let [m1-val (get m1 %)
-                                 m2-val (get m2 %)]
-                             (or #_(cvar? m1-val)
-                                 #_(cvar? m2-val)
-                                 (= m1-val m2-val))) ; incomplete means even cvars must match
-                          common-keys))))
+                  (every? #(= (get m1 %) (get m2 %)) common-keys))))
             true
             combos)))
 
@@ -425,8 +378,8 @@
    to filter out tuples that don't consistently bind to the rule's RHS.
    With data (for debugging), it runs that filter."
   [tail & {:keys [data]}] ; data for debugging.
-  ;(good-fnot-meta? tail "frpt tail")
-  ;(good-fnot-meta? data "frpt data")
+  ;;(dev/good-fnot-meta? tail "frpt tail")
+  ;;(dev/good-fnot-meta? data "frpt data")
   (if data
     (filter #(consistent-bindings? % tail) data)
     (filter #(consistent-bindings? % tail))))
@@ -518,7 +471,7 @@
    could require further expansion of rules or terminate in facts and assumptions.
    Thus it provides 'one step' of a proof." ; ToDo: I don't think prv needs to be ground.
   [kb prv]
-  (good-fnot-meta? prv "rhs-binding-infos (1)")
+  ;;(dev/good-fnot-meta? prv "rhs-binding-infos (1)")
   (let [tailtab (tailtab kb prv)]
     (as-> (reduce (fn [res rule-id]
                     (let [tail (-> kb :rules rule-id :tail)]
@@ -528,7 +481,7 @@
                   {}
                   (keys tailtab)) ?pset-maps
       (reapply-fnot-meta ?pset-maps)
-      (good-fnot-meta? ?pset-maps "rhs-binding-infos (1.1)")
+      ;;(dev/good-fnot-meta? ?pset-maps "rhs-binding-infos (1.1)")
       ;; If the RHSs include an instance that is all ground, the non-ground ones must go.  ToDo: right?
       (reduce-kv (fn [res rule-id psets]
                    (if (some ground? psets)
@@ -545,8 +498,7 @@
                                        (assoc :bindings (unify* tail %)))
                                   psets))))
                  {}
-                 ?pset-maps)
-      (good-fnot-meta? ?pset-maps "rhs-binding-infos (2)"))))
+                 ?pset-maps))))
 
 (def scope-debugging? false)
 (def binding-stack (atom '()))
@@ -687,7 +639,7 @@
 (defn rule-solve
   "Prove prv using a rule. This is mutually recursive with prove-fact."
   [kb prv caller]
-  (good-fnot-meta? prv "rule-solve")
+  ;;(dev/good-fnot-meta? prv "rule-solve")
   (reduce-kv
    (fn [res rule-id sols]
      (let [rule (-> kb :rules rule-id)
@@ -735,7 +687,7 @@
         proof (assoc proof :proofs [])
         heads (->> kb :rules vals (map :head))
         bound (atom nil)]
-    (good-fnot-meta? prv "prove-fact")
+    ;;(dev/good-fnot-meta? prv "prove-fact")
     (cond (reset! bound (observation-solve? kb prv))       (update proof :proofs into (map #(assoc % :observation-used? true) @bound)),
           (reset! bound (fact-solve? kb prv))              (update proof :proofs into (map #(-> %
                                                                                                 (assoc :fact-used? true)
@@ -801,8 +753,7 @@
 ;;;======================================= Toplevel =========================================
 ;;; (-> '(alarm plaza) (explain alarm-kb) :mpe :summary)
 (defn explain
-  "Toplevel function to adduce proof trees, generate the MAXSAT problem,
-   run it, and translate the result back to predicates."
+  "Toplevel function to generate proof trees and MAXSAT problems, run them, and post-processe results."
   [query kb & {:keys[loser-fn max-together observations params] :or {loser-fn identity max-together 10}}]
   (let [observations+ (conj observations query)]
     (as->  kb ?kb
@@ -818,6 +769,7 @@
       (update ?kb :pclauses       #(maxsat/add-inverse-pclauses %))
       (assoc  ?kb :pclauses        (maxsat/reduce-pclauses ?kb))
       (update ?kb :pclauses       #(maxsat/add-id-to-comments %))
+      (break-here ?kb)
       (maxsat/run-problem ?kb :loser-fn loser-fn :max-together max-together))))
 
 ;;;======================================= Reporting ====================================
@@ -831,31 +783,36 @@
       (cl-format stream "~A" (maxsat/wdimacs-string kb :commented? true)))))
 
 (defn solution-props
-  "Return a vector of propositions corresponding to the individual's model (a vector of PIDs)."
-  [indv prop-ids query]
-  (let [pid2prop (-> prop-ids (dissoc query) sets/map-invert)]
+  "Return a vector of propositions corresponding to the model (a vector of PIDs)."
+  [model prop-ids query]
+  (let [prop-ids-inv (-> prop-ids (dissoc query) sets/map-invert)
+        prop-id? (-> prop-ids-inv keys set)]
     (reduce (fn [res pid]
-              (if-let [prop (get pid2prop pid)] (conj res prop) res))
+              (if (or (prop-id? pid) (prop-id? (- pid))) ; Ignore z-vars.
+                (if (pos? pid)
+                  (conj res (get prop-ids-inv pid))
+                  (conj res (with-meta (conj (get prop-ids-inv (abs pid)) :fact/not) {:factual-not? true})))
+                res))
             []
-            (:model indv))))
+            model)))
 
 (defn report-solutions
   "Print an interpretation of the solutions."
-  [{:keys [mpe params] :as kb} stream & {:keys [solution-number] :or {solution-number 0}}]
+  [{:keys [mpe params prop-ids query] :as kb} stream]
+  (reset! diag kb)
   (cl-format stream "~%")
-  (let [num-sols (-> mpe :solutions count)]
-    (if (:all-individuals? params)
-      (doseq [{:keys [prob model]} mpe]
-        (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}]" prob model))
-      (if (> num-sols solution-number)
-        (doseq [sol (-> kb :mpe :solutions)]
-          (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
-                     (:prob sol) (:model sol) (:satisfies-proofs sol)
-                     (solution-props sol (:prop-ids kb) (:query kb))))
-        ;; No solutions, so just show p-inv
-        (cl-format stream "No solution.~2%~{~A~%~}"
-                   (->> kb :prop-ids clojure.set/map-invert vec (sort-by first)))))
-    true))
+  (if (:all-individuals? params)
+    (do (doseq [{:keys [prob model]} mpe]
+          (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}]" prob model))
+        (cl-format stream "~% Total probability: ~A" (->> mpe (map :prob) (apply +))))
+    (doseq [{:keys [prob model satisfies]} mpe]
+      (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
+                 prob
+                 model
+                 satisfies
+                 (solution-props model prop-ids query))))
+  (when (empty? mpe)  (cl-format stream "~%No solution."))
+  true)
 
 (defn report-prop-ids
   [kb stream]

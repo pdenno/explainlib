@@ -18,7 +18,6 @@
 
 (defkb park-kb
   "A KB for testing the problem from Park (2002) 'Using Weighted MAX-SAT engines to solve MPE'. (D is unlikely, C helps a little)."
-  :all-individuals? true
   :rules [{:prob 0.2 :head (dee ?x)   :tail [(cee ?x)]}               ; 0.200 :rule-1  :: (dee ?x-r1) :- (cee ?x-r1)
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
   :facts [{:prob 0.3 :form (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
@@ -29,21 +28,29 @@
 ;;;  -c |  0.7                        c   -d   |   0.8    INV  c ->  d                0.24
 ;;;                                  -c    d   |   0.1        -c ->  d                0.07
 ;;;                                  -c   -d   |   0.9    INV -c ->  d                0.63 (Since these are all possible individuals, the sum is 1.0.)
+;;;
 ;;; Note that the things you get back from MAXSAT are the costs of clauses you violated; lowest cost is the most likely explanation but to
 ;;; get a probability back you'd have to plug the answer back into the Bayes net.
 ;;; In this example (park-all-indv below) we use parameter :all-individuals?=true which is useful for validation of small tests like this.
 ;;; It doesn't provide explanations for D (dee) specifically though.
 ;;; It is useful in cases where you want something other than the sort of model counting we do when :all-individuals?=false.
+
+(def park-all-kb (assoc-in park-kb [:params :all-individuals?] true))
+
 (deftest park-all-indv
   (testing "Testing that park-kb MPE calculation is correct."
-    (is (= [{:model [-1, -2], :cost 47,  :prob 0.63}
-            {:model [ 1, -2], :cost 142, :prob 0.24}
-            {:model [-1,  2], :cost 266, :prob 0.06999999999999999}
-            {:model [ 1,  2], :cost 281, :prob 0.06}] ; These sum to 1.0 as above.
-           (-> '(dee foo) (explain  park-kb) :mpe)))))
+    (let [mpe (-> '(dee foo) (explain  park-all-kb) :mpe)]
+      (testing "Testing that park-kb matches hand-calculated values."
+        (is (= [{:model [-1, -2], :cost 47,  :prob 0.63}
+                {:model [ 1, -2], :cost 142, :prob 0.24}
+                {:model [-1,  2], :cost 266, :prob 0.06999999999999999}
+                {:model [ 1,  2], :cost 281, :prob 0.06}]
+               mpe)))
+      (testing "Testing that probability of the individuals sums to 1.0"
+        (is (== 1.0 (->> mpe (map :prob)  (apply +))))))))
 
 (deftest park-concept
-  (testing "Demonstrating the concept of using a MAXSAT solver for MPE."
+  (testing "Demonstrating the concept of using a MAXSAT solver for MPE. Demonstrating reporting."
     (testing "The presentation of WDIMACS using report-problem as shown has end comments, which isn't legal syntax."
       (is (= (->> ["p wcnf 2 6 581"                ; There are 2 variables, 6 clauses and the sum of the costs + 1 = 581.
                    ""                              ; There are no hard clauses because of :all-individuals?=true
@@ -73,12 +80,10 @@
                  (with-out-str (-> (explain '(dee foo) park-kb) (explain/report-results *out*))))))))))
 
 ;;;==================================== Simple end-to-end MPE =====================================
-
 ;;; My interpretation is the ProbLog interpretation.
 ;;; The ProbLog reading of these is CAUSAL: If +b ^ +e, this  causes an alarm to be true with probabiility 0.9.
 ;;; Further, the CPT entries that aren't stated are assumed to be zero.
 ;;; This makes sense from the causal perspective if you assume that you've accounted for all causes.
-;;; (def aaa (explain '(alarm plaza) et/alarm-kb))
 (defkb alarm-kb
   "A KB for a problem in the ProbLog documentation."
   :rules [{:prob 0.9
@@ -93,7 +98,20 @@
   :facts [{:prob 0.7 :form (burglary ?loc)}
           {:prob 0.2 :form (earthquake ?loc)}])
 
-;;; Read these as probabilities that the road will be blocked for the reasons that are antecedents.
+(def alarm-all-kb
+  (-> alarm-kb
+      (assoc-in [:params :all-individuals?] true)
+      ;; Adding a rule like this doesn't make much difference.
+      #_(update :rules #(conj % {:prob 0.5
+                               :head  '(alarm ?loc)
+                               :tail  '[(not (burglary ?loc)) (not (earthquake ?loc))]}))))
+
+(deftest all-individuals
+  (testing "Testing that when :all-individuals?=true, the probability of the population sums to 1.0."
+    (testing "Testing alarm-kb for :all-individuals?=true sum."
+      (is (== 1.0
+              (->> (explain '(alarm plaza) alarm-all-kb) :mpe (map :prob) (apply +)))))))
+
 (defkb road-is-slow-even-kb
   "The ProbLog blocked road KB. Everything is equal, thus heavy-snow is just as likely as accident."
   :rules  [{:prob 0.5
@@ -120,6 +138,10 @@
           {:prob 0.2 :form (accident ?x)}
           {:prob 0.2 :form (clearing-wreck ?x ?y)}])
 
+(def road-is-slow-all-kb
+  (-> road-is-slow-kb
+      (assoc-in [:params :all-individuals?] true)))
+
 (defkb road-is-slow-assumption-kb
   "blocked road with (clearing-wreck $crew-r2-skolem-1 mt-pass) (default assumption prob is 0.10) thus heavy-snow should be favored."
   :rules  [{:prob 0.5
@@ -132,7 +154,6 @@
           {:prob 0.2 :form (bad-road-for-snow ?x)}
           {:prob 0.2 :form (accident ?x)}]) ; Dropped clearing-wreck.
 
-;;; (def jjj (explain '(groupby Table-1 COLA COLB) et/job-kb))
 (defkb job-kb
   "This KB is from a problem described in my thesis: find columns that together describe a job."
   :rules [{:prob 0.70 :head (concatKey ?tab ?x ?y)      :tail [(jobID ?tab ?x ?y)]}
@@ -289,7 +310,6 @@
       (testing "Testing fact-solve"
         (is (= '({:prob 0.7, :form (burglary ?loc), :id :fact-1, :prvn (burglary plaza), :bindings {?loc plaza}})
                (explain/fact-solve? kb '(burglary plaza))))))))
-
 
 ;;;==================================== Other one- and two-rule MPE =====================================
 (defkb one-rule-kb
@@ -884,6 +904,11 @@
           (dissoc ?exp :kb :evidence))]
     result))
 
+
+(defkb _blank-kb "This KB is used to define the following default- vars.")
+(def default-params (-> _blank-kb :params))
+(def default-vars   (-> _blank-kb :vars))
+
 ;;; I think these are a good idea even once I've implemented elimination order.
 ;;; However, some such as black-listed ta/isType might not be useful because the reasoner doesn't assume
 ;;; in places where some value exists.
@@ -891,7 +916,7 @@
   "Excepting 'requires-evidence?' these are probably hacks!" ; ToDo: If not a hack r-e? and b-l-p? then need it in defkb.
   [kb+setup]
   (assoc-in kb+setup [:kb :params]
-            (merge explain/default-params
+            (merge default-params
                    {:default-assume-prob       0.400 ; <==== ahem... Also the next two!
                     :not-yet-implemented?      '#{py/traceVar} ; ToDo: This one and next aren't even part of defkb.
                     :requires-evidence?        '#{mz/indexedBy mz/indexedBy-1 mz/indexedBy-2 py/linkBack}

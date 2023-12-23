@@ -52,6 +52,11 @@
      (apply str (:vargs data)) ; So it can do simple indented call tracing.
      (taoensso.timbre/default-output-fn opts (dissoc data :hostname_ :timestamp_)))))
 
+;;; ToDo: Start using this function.
+(defn make-fnot
+  [form]
+  (with-meta (conj form :fact/not) {:factual-not? true}))
+
 (defn fact-not?
   "Return the rest of the proposition (the part without the not) the fact is a factual-not."
   [fact]

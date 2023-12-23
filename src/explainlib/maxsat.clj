@@ -258,7 +258,7 @@
          (mapv #(dissoc % :remove?)))))
 
 (defn set-pclause-prop-ids
-  "Add a :pos key to every :pred of each :cnf of :pclauses.
+  "Add a :pid key to every :pred of each :cnf of :pclauses.
    It indicates the proposition number for the MAXSAT analysis."
   [pclause prop-ids game]
   (update pclause :cnf
@@ -268,7 +268,7 @@
                           id (or (get prop-ids (:pred lit))
                                  (get prop-ids (-> lit :pred fact-not?)))]
                       (if id
-                        (assoc lit :pos id)
+                        (assoc lit :pid id)
                         (throw (ex-info "Literal from pclause CNF not in prop-ids:"
                                         {:game game :pred (:pred lit)
                                          :pclause pclause :prop-ids prop-ids})))))
@@ -285,6 +285,21 @@
     (when-let [bad (some #(when-not (normal? %) %) (map rest fnots))]
       (log/warn "Factual not predicate" bad "does not have a corresponding positive predicate."))
     (zipmap (sort-by first normal?) (range 1 (-> normal? count inc)))))
+
+(defn update-proof-vecs-with-prop-ids
+  "Update the proof-vecs with the (polarized) prop-ids to which the steps refer."
+  [proof-vecs prop-ids]
+  (let [full-prop-ids (merge prop-ids (reduce-kv (fn [m k v] (assoc m (util/make-fnot k) (- v))) {} prop-ids))]
+    (reduce-kv (fn [res pf-id proof]
+                 (assoc res pf-id
+                        (update proof :steps
+                                (fn [steps]
+                                  (mapv #(if-let [pid (get full-prop-ids (:form %))]
+                                           (assoc % :pid pid)
+                                           (throw (ex-info "There is no prop-id for proposition" {:prop (:form %)})))
+                                        steps)))))
+               {}
+               proof-vecs)))
 
 (defn has-inverse?
   "Return true if the inverse of pc is already found in the pclauses."
@@ -329,7 +344,14 @@
             result)
         result))))
 
-(defn indv-probability
+(defn project-model-to-pids
+  "The :model of an individual from python results has all the PID, including z-vars.
+   This returns a vector of only the PIDs that concern propositions."
+  [model prop-ids]
+  (let [keep-id? (-> prop-ids vals set)]
+    (filterv #(-> % abs keep-id?) model)))
+
+(defn indv-probability-aux
   "Return the probability of the individual.
    An individual is a vector of proposition-ids or (- proposition-id).
    Typically the individual is calculated by python maxsat (the :model returned).
@@ -344,59 +366,69 @@
                  soft-clauses)
          (apply *))))
 
-(defn summarize-indvs
+;;; ToDo: Study the literature on proof counting and fix this.
+(defn indv-probabilities
   "Calculate the probability of each individual.
-   Using :soft-clauses, collect the probabilities of all clauses for which the individual does not violate clause.
-   Multiply those together."
-  [soft-clauses python-results]
-  (->> python-results
-       (map #(assoc % :prob (-> % :model (indv-probability soft-clauses))))
-       (sort #(> (:prob %1) (:prob %2)))
-       vec))
+   If the analysis is :all-individuals?=true, there may not be pclauses that provide probability for the query,
+   thus there can be a factor missing from the calculation.
+   To address this, we normalize the individual populations relative to the total probabability.
+   When :all-individuals?=false we calculate probability using the pclauses we have.
+   There may be a 'model counting' error in this, but I think at least the relative values are reasonable.
+   Note that in reporting, where :all-individuals?=false we'd typically calculate sums of individual probabilities
+   by proofs they satisfy."
+  [py-results {:keys [soft-clauses params]}]
+  (let [raw-prob-indvs (map #(assoc % :prob (-> % :model (indv-probability-aux soft-clauses))) py-results)]
+    (if (:all-individuals? params)
+      (let [normal (->> raw-prob-indvs (map :prob) (apply +))]
+        (map (fn [indv] (update indv :prob #(/ % normal))) raw-prob-indvs))
+      raw-prob-indvs)))
 
 (defn find-matching-proofs
   "Find all the proofs matching the model arg.
-   The model arg should not contain any z-vars but should contain PID for the query.
-   This is not usable with :all-individuals?=true.
-   Method: Reduce the union of proofs by removing any for which the individual doesn't
-   conform to the :applies-to of a soft-clause."
-  [model soft-clauses]
-  (let [in-model? (set model)]
-    (reduce (fn [res clause]
-              (if (every? #(in-model? %) (:applies-to clause))
-                res
-                (sets/difference res (:used-in clause))))
-            (apply sets/union (map :used-in soft-clauses))
-            soft-clauses)))
+   The model arg SHOULD NOT CONTAIN ANY Z-VARS but should contain PID for the query."
+  [indv proof-vecs prop-ids]
+  (let [model-set (-> indv :model (project-model-to-pids prop-ids) set)
+        pvecs (reduce-kv (fn [m proof-id proof] (assoc m proof-id (mapv :pid (:steps proof)))) {}  proof-vecs)]
+    (reduce-kv (fn [res proof-id requires-pids]
+                 (if (every? #(model-set %) requires-pids) (conj res proof-id) res))
+               []
+               pvecs)))
+
+(defn postprocess-indvs
+  "Calculate the probability of each individual.
+   Using :soft-clauses, collect the probabilities of all clauses for which the individual does not violate clause.
+   Multiply those together."
+  [python-results {:keys [params prop-ids proof-vecs] :as kb}]
+  (as-> python-results ?mpe
+    (indv-probabilities ?mpe kb)
+    (if (-> params :all-individuals?)
+      ?mpe
+      (mapv #(assoc % :satisfies (find-matching-proofs % proof-vecs prop-ids)) ?mpe))
+    (sort #(> (:prob %1) (:prob %2)) ?mpe)
+    (vec ?mpe)))
 
 (defn python-maxsat
   "Run a python RC2 MAXSAT problem. Return a vector describing results.
    The idea of running MAXSAT is to run a weighted satisifaction problem.
    N.B. Getting the cost of each individual solution is trivial; the true value of MAXSAT is realized
    when there are :protected clauses. In those cases it can solve a non-trivial satisfaction problem."
-  [{:keys [wdimacs params soft-clauses prop-ids]}]
-  (let [keep-id? (-> prop-ids sets/map-invert vals set)]
-    (letfn [(project-model [indv] ; Return a model with prop-ids only for props (no z-vars).
-              (filter #(-> % abs keep-id?) (:model indv)))]
-      (as-> (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40) ?py-res  ; ToDo: 40?
-        (summarize-indvs soft-clauses ?py-res)
-        (if (-> params :all-individuals?)
-          ?py-res
-          (mapv #(assoc % :satisfies (find-matching-proofs (project-model %) soft-clauses)) ?py-res))))))
+  [{:keys [wdimacs] :as kb}]
+  (-> (run-rc2-problem (wcnf/WCNF nil :from_string wdimacs) 40) ; ToDo: 40?
+      (postprocess-indvs kb)))
 
 (defn pclause2pid-vec
   "Return a vector of the proposition ids for the given pclause."
   [pclause]
   (->> pclause
        :cnf
-       (mapv (fn [{:keys [neg? pos]}] (if neg? (- pos) pos)))))
+       (mapv (fn [{:keys [neg? pid]}] (if neg? (- pid) pid)))))
 
 (defn applies-to
   "Return a vector of the prop-ids integers that can be used to check and model's conformance to the pclause.
    Not that pclause.cnf for rules is ordered: the first literal is the head.
    The polarity of the head is correct as is. The polarity of all tail literals needs to be reversed."
   [{:keys [cnf] :as pclause}]
-  (letfn [(lit-val [lit] (if (:neg? lit) (-> lit :pos -) (:pos lit)))]
+  (letfn [(lit-val [lit] (if (:neg? lit) (-> lit :pid -) (:pid lit)))]
     (if (:rule? pclause)
       (into (-> cnf first lit-val vector)
             (->> cnf rest (map lit-val) (map -)))
@@ -432,14 +464,12 @@
         (:fact? pclause)       (assoc  :fact? true)
         (:assumption? pclause) (assoc  :assumption? true)
         true                   (assoc  :applies-to (applies-to pclause))
-        ;;true                   (assoc  :applies-to (filterv number? clause-vals))   ; ToDo: Is filter necessary? Why?
-        ;;(:rule? pclause)       (update :applies-to (fn [v] (update v 0 #(- %))))
         true                   (assoc  :cost cost)
         true                   (assoc  :str-commented (cl-format nil "~5A~{~5d~} c ~A" cost (conj clause-vals 0) (or (:comment pclause) "")))
         true                   (assoc  :str           (cl-format nil "~5A~{~5d~}" cost (conj clause-vals 0)))
-        true                   (assoc  :cnf           (:cnf pclause))
+        #_#_true                   (assoc  :cnf           (:cnf pclause))
         true                   (assoc  :prob          (:prob pclause))
-        true                   (assoc  :used-in       (:used-in pclause)))))
+        #_#_true                   (assoc  :used-in       (:used-in pclause)))))
 
 (defn z-vars
   "Return a vector of the Tseitin z-vars for the problem.
@@ -580,28 +610,29 @@
   "Produce a kb-like object that is a projection of the kb for the list of proof-ids given the the argument game.
    Add game-specific properties such as prop-ids, z-var,  and wdimacs."
   [kb game]
-  (as-> {} ?game-kb
-    (assoc ?game-kb :game game)
-    (assoc ?game-kb :vars (:vars kb))
-    (assoc ?game-kb :params (:params kb))
-    (assoc ?game-kb :query (:query kb))
-    (assoc ?game-kb :rules (:rules kb))
-    (assoc ?game-kb :facts (:facts kb))
+  (as-> {}  ?game-kb
+    (assoc  ?game-kb :game game)
+    (assoc  ?game-kb :vars (:vars kb))
+    (assoc  ?game-kb :params (:params kb))
+    (assoc  ?game-kb :query (:query kb))
+    (assoc  ?game-kb :rules (:rules kb))
+    (assoc  ?game-kb :facts (:facts kb))
     ;; Assumptions are created by proofs, so they are found in pclauses. Like rules and facts, they need :form.
-    (assoc ?game-kb :assumptions (reduce (fn [res a] (assoc res (:id a) a))
+    (assoc  ?game-kb :assumptions (reduce (fn [res a] (assoc res (:id a) a))
                                          {}
                                          (->> kb :pclauses (filter :assumption?) (remove #(-> % :cnf first :neg?)))))
-    (assoc ?game-kb :proof-vecs
-           (reduce (fn [res pf-id] (assoc res pf-id (-> kb :proof-vecs pf-id)))
-                   {}
-                   game))
-    (assoc ?game-kb :prop-ids (make-prop-ids-map ?game-kb))
-    (assoc ?game-kb :pclauses
-           (-> (reduce (fn [res pf-id]
-                         (into res (filter #((:used-in %) pf-id)) (:pclauses kb)))
-                       #{} ; A set or you will get one copy for every proof in which the clause is used.
-                       game)
-               util/reapply-fnot-meta))
+    (assoc  ?game-kb :proof-vecs
+            (reduce (fn [res pf-id] (assoc res pf-id (-> kb :proof-vecs pf-id)))
+                    {}
+                    game))
+    (assoc  ?game-kb :prop-ids (make-prop-ids-map ?game-kb))
+    (update ?game-kb :proof-vecs #(update-proof-vecs-with-prop-ids % (:prop-ids ?game-kb)))
+    (assoc  ?game-kb :pclauses
+            (-> (reduce (fn [res pf-id]
+                          (into res (filter #((:used-in %) pf-id)) (:pclauses kb)))
+                        #{} ; A set or you will get one copy for every proof in which the clause is used.
+                        game)
+                util/reapply-fnot-meta))
     (update ?game-kb :pclauses (fn [pcs] (mapv #(set-pclause-prop-ids
                                                  % (:prop-ids ?game-kb) game)
                                                pcs)))

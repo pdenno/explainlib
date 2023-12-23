@@ -16,6 +16,7 @@
 ;;;  1) Implement :protected.
 ;;;  2) Remove pclause.id, they aren't unique and we don't need them.
 ;;;  3) Check if query can be answered by facts.
+;;;  4) Reconsider CNF structure: Example: [{:pred (cee foo), :neg? true, :pid 1}]. Remove :neg?, :pid -1, maybe (:fact/not cee foo).
 
 (def default-elimination-threshold       "Remove certain proofs when there are more than this number. See fn winnow-by-priority" 400)
 (def default-black-listed-preds          "Gives a warning when used as an assumption; uses default probability."                 #{}) ; ToDo: Useful?
@@ -47,10 +48,10 @@
 ;;;                       The pclause represents the intent of CNF and the CNF is used directly to define a weighted MAXSAT constraint, it is not inverted for this purpose.
 ;;;                       For example, with prop-ids = {(cee foo) 1, (dee foo) 2}:
 ;;;                            (1) a fact (cee ?x), with p=0.300 may be instantiated as (cee foo) in a proof.
-;;;                                -- has pclause: {:prob 0.3, :fact? true,  :cnf [{:pred (cee foo), :neg? false, :pos 1}], :comment "fact-1 (cee foo)", :used-in #{:proof-1}}
+;;;                                -- has pclause: {:prob 0.3, :fact? true,  :cnf [{:pred (cee foo), :neg? false, :pid 1}], :comment "fact-1 (cee foo)", :used-in #{:proof-1}}
 ;;;                                -- has wdimacs: "36       1         0 c fact-1 (cee foo)"
 ;;;                            (2) a rule (dee ?x-r1) :- (cee ?x-r1)  with p=0.200 means "(cee whatever) implies (dee whatever)."
-;;;                                -- has pclause:  {:prob 0.2 :cnf [{:pred (dee foo), :neg? false, :pos 2} {:pred (cee foo), :neg? true, :pos 1}],   :comment "rule-1 :rule-1 {?x-r1 foo} (dee foo)",}
+;;;                                -- has pclause:  {:prob 0.2 :cnf [{:pred (dee foo), :neg? false, :pid 2} {:pred (cee foo), :neg? true, :pid 1}],   :comment "rule-1 :rule-1 {?x-r1 foo} (dee foo)",}
 ;;;                                -- has wdimacs:  "22      -1    2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo)"
 ;;;                                   which means that if an individual violates this rule by having [1 -2] (cee is true but not dee) it picks up the small penalty of 22.
 ;;;                                   The penalty is small because the the rule only holds p=0.200 of the time.
@@ -796,22 +797,50 @@
             []
             model)))
 
+(defn combine-by-proof
+  "Combine individuals by the proofs they solve."
+  [{:keys [mpe] :as kb}]
+  (let [by-proof-atm (atom {})
+        proof-probs (do (doseq [{:keys [prob satisfies]} mpe]
+                          (doseq [prf satisfies]
+                            (swap! by-proof-atm #(update % prf conj prob))))
+                        (reduce-kv (fn [m k v] (assoc m k (apply + v))) {} @by-proof-atm))]
+    (reduce-kv (fn [m proof-id v]
+                 (assoc m :propositions :nyi)
+                 []
+                 mpe))))
+
+;;;     (let [prob-by-proof (reduce-kv (fn [m k v] (assoc m k (apply + v))) {} @by-proof-atm)]
+;;;       (doseq [[proof-id prob] (->> (seq prob-by-proof) (sort #(> (second %1) (second %2))))]))
+;;;     (solution-props model prop-ids query)))
+
 (defn report-solutions
-  "Print an interpretation of the solutions."
-  [{:keys [mpe params prop-ids query] :as kb} stream]
+  "Print an interpretation of the solutions either by proofs, or if :all-individuals?=true, by individual."
+  [{:keys [mpe params prop-ids query proof-vecs] :as kb} stream]
   (reset! diag kb)
   (cl-format stream "~%")
   (if (:all-individuals? params)
     (do (doseq [{:keys [prob model]} mpe]
-          (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}]" prob model))
+          (cl-format stream "~%prob:  ~,3f, model: [~{~3d~^,~}]" prob model))
         (cl-format stream "~% Total probability: ~A" (->> mpe (map :prob) (apply +))))
-    (doseq [{:keys [prob model satisfies]} mpe]
-      (cl-format stream "~%prob:  ~,5f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
-                 prob
-                 model
-                 satisfies
-                 (solution-props model prop-ids query))))
-  (when (empty? mpe)  (cl-format stream "~%No solution."))
+    (if (empty? mpe)
+      (cl-format stream "~%No solution.")
+      (let [by-proof-atm (atom {})]
+        (doseq [{:keys [prob model satisfies]} mpe]
+          (cl-format stream "~%prob:  ~,3f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
+                     prob
+                     model
+                     satisfies
+                     (solution-props model prop-ids query)))
+        (cl-format stream "~%")
+        (doseq [{:keys [prob satisfies]} mpe]
+          (doseq [prf satisfies]
+            (swap! by-proof-atm #(update % prf conj prob))))
+        (let [prob-by-proof (reduce-kv (fn [m k v] (assoc m k (apply + v))) {} @by-proof-atm)]
+          (doseq [[proof-id prob] (->> (seq prob-by-proof) (sort #(> (second %1) (second %2))))]
+            (cl-format stream "~% proof: ~A probability: ~,3f propositions: ~A"
+                       proof-id
+                       prob (-> proof-vecs proof-id :pvec-props)))))))
   true)
 
 (defn report-prop-ids

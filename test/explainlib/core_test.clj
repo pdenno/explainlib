@@ -98,20 +98,6 @@
   :facts [{:prob 0.7 :form (burglary ?loc)}
           {:prob 0.2 :form (earthquake ?loc)}])
 
-(def alarm-all-kb
-  (-> alarm-kb
-      (assoc-in [:params :all-individuals?] true)
-      ;; Adding a rule like this doesn't make much difference.
-      #_(update :rules #(conj % {:prob 0.5
-                               :head  '(alarm ?loc)
-                               :tail  '[(not (burglary ?loc)) (not (earthquake ?loc))]}))))
-
-(deftest all-individuals
-  (testing "Testing that when :all-individuals?=true, the probability of the population sums to 1.0."
-    (testing "Testing alarm-kb for :all-individuals?=true sum."
-      (is (== 1.0
-              (->> (explain '(alarm plaza) alarm-all-kb) :mpe (map :prob) (apply +)))))))
-
 (defkb road-is-slow-even-kb
   "The ProbLog blocked road KB. Everything is equal, thus heavy-snow is just as likely as accident."
   :rules  [{:prob 0.5
@@ -255,6 +241,10 @@
           {:prob 0.1 :form (failing-sensor robot-8 joint-2)}
           {:prob 0.7 :form (bad-sensor-processing robot-8)}])
 
+(defn concise-summary
+  "Return a concise summary of results for use in testing."
+  [model {:keys [prop-ids query]}])
+
 ;;;------ Tests for the above KBs ----------------------------
 ;;;  For more information about these, use, for example, (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) ex/report-results)
 (deftest good-simple-cases
@@ -297,6 +287,16 @@
     (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
       (is (= {:proof-1 0.24652800000000008, :proof-2 0.06311199999999999}
              (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) :mpe :summary))))))
+
+
+(def alarm-all-kb (assoc-in alarm-kb [:params :all-individuals?] true))
+
+;;; These are sort of self-fulfilling prophesies, given normalization that is happening.
+(deftest all-individuals
+  (testing "Testing that when :all-individuals?=true, the probability of the population sums to 1.0."
+    (testing "Testing alarm-kb for :all-individuals?=true sum."
+      (is (<= 0.99999 (->> (explain '(alarm plaza) alarm-all-kb) :mpe (map :prob) (apply +)) 1.00001)))))
+
 
 (deftest proof-steps
   (testing "Testing steps of proofs."

@@ -9,7 +9,7 @@
    [explainlib.extra             :as dev] ; ToDo: How do we make this present only in dev environment?
    [explainlib.maxsat            :as maxsat]
    [explainlib.specs             :as specs]
-   [explainlib.util              :as util :refer [unify* fact-not? varize collect-vars ground? cvar? reapply-fnot-meta]]
+   [explainlib.util              :as util :refer [unify* fact-not? varize collect-vars ground? cvar? reapply-fnot-meta this-order]]
    [taoensso.timbre              :as log]))
 
 ;;; ToDo:
@@ -24,6 +24,9 @@
 (def default-assumption-probability      "Assumptions should have their own probability. Warns when this is used."             0.100)
 (def default-requires-evidence?          "A set of predicates symbols for which there is a warning if using an assumption."      #{})
 (def default-all-individuals?            "Compute all individuals, not just those that have the query form true."              false)
+(def default-normalize-probabilities?
+  "When all-individuals?=true the problem might not have a pclause every RHS of the query.
+   In that case the probability of all individuals won't sum to 1.0; This will normalize probabilities."                        true)
 
 ;;; For debugging
 (def diag  (atom {}))
@@ -170,14 +173,14 @@
 
 (def valid-kb-keys "Keys allowed in a defkb declaration."
   #{:rules :facts :observations :eliminate-by-assumptions :elimination-priority :elimination-threshold :cost-fn :inv-cost-fn
-    :black-listed-preds :black-list-prob :default-assume-prob :requires-evidence? :all-individuals?})
+    :black-listed-preds :black-list-prob :default-assume-prob :requires-evidence? :all-individuals? :normalize-probabilities?})
 
 (defmacro defkb
   "A defkb structure is a knowledgebase used in BALP. Thus it isn't yet a BN; that
    will be generated afterwards. Its facts are observations. Each observation is a ground
    literal that will be processed through BALP to generate all proof trees."
   [name doc-string & {:keys [rules facts observations eliminate-by-assumptions elimination-priority elimination-threshold cost-fn inv-cost-fn
-                             black-listed-preds black-list-prob default-assume-prob requires-evidence? all-individuals?]
+                             black-listed-preds black-list-prob default-assume-prob requires-evidence? all-individuals? normalize-probabilities?]
            :or {rules                      []
                 facts                      []
                 observations               []
@@ -186,6 +189,7 @@
                 cost-fn                    maxsat/rc2-cost-fn
                 inv-cost-fn                maxsat/rc2-cost-fn-inv
                 all-individuals?           default-all-individuals?
+                normalize-probabilities?   default-normalize-probabilities?
                 requires-evidence?         default-requires-evidence?
                 elimination-threshold      default-elimination-threshold
                 black-listed-preds         default-black-listed-preds
@@ -201,6 +205,7 @@
                                 :params {:cost-fn                    ~cost-fn,
                                          :inv-cost-fn                ~inv-cost-fn
                                          :all-individuals?           ~all-individuals?
+                                         :normalize-probabilities?   ~normalize-probabilities?
                                          :black-listed-preds         ~black-listed-preds
                                          :black-list-prob            ~black-list-prob
                                          :default-assume-prob        ~default-assume-prob
@@ -770,6 +775,11 @@
       (update ?kb :pclauses       #(maxsat/add-inverse-pclauses %))
       (assoc  ?kb :pclauses        (maxsat/reduce-pclauses ?kb))
       (update ?kb :pclauses       #(maxsat/add-id-to-comments %))
+      (if (s/valid? ::specs/proof-completed-obj ?kb)
+        ?kb
+        (do
+          (s/explain ::specs/proof-completed-obj ?kb)
+          (throw (ex-info "Problem generating a proof-completed object." {}))))
       (break-here ?kb)
       (maxsat/run-problem ?kb :loser-fn loser-fn :max-together max-together))))
 
@@ -783,8 +793,8 @@
       (cl-format stream "~%Printing of WDIMACS suppressed owing to the problem being large.~%")
       (cl-format stream "~A" (maxsat/wdimacs-string kb :commented? true)))))
 
-(defn solution-props
-  "Return a vector of propositions corresponding to the model (a vector of PIDs)."
+(defn model-solution-props
+  "For argument model, return a vector of propositions corresponding to the model (a vector of PIDs)."
   [model prop-ids query]
   (let [prop-ids-inv (-> prop-ids (dissoc query) sets/map-invert)
         prop-id? (-> prop-ids-inv keys set)]
@@ -797,26 +807,30 @@
             []
             model)))
 
-(defn combine-by-proof
-  "Combine individuals by the proofs they solve."
-  [{:keys [mpe] :as kb}]
-  (let [by-proof-atm (atom {})
-        proof-probs (do (doseq [{:keys [prob satisfies]} mpe]
-                          (doseq [prf satisfies]
-                            (swap! by-proof-atm #(update % prf conj prob))))
-                        (reduce-kv (fn [m k v] (assoc m k (apply + v))) {} @by-proof-atm))]
-    (reduce-kv (fn [m proof-id v]
-                 (assoc m :propositions :nyi)
-                 []
-                 mpe))))
-
-;;;     (let [prob-by-proof (reduce-kv (fn [m k v] (assoc m k (apply + v))) {} @by-proof-atm)]
-;;;       (doseq [[proof-id prob] (->> (seq prob-by-proof) (sort #(> (second %1) (second %2))))]))
-;;;     (solution-props model prop-ids query)))
+(defn probability-by-proof
+  "Return a vector of objects sorted by probability of information about proofs.
+   Only useful for :all-individuals?=false."
+  [{:keys [mpe params proof-vecs] :as kb}]
+  (when-not (:all-individuals? params)
+    (let [by-proof-atm (atom {})]
+      (doseq [{:keys [prob satisfies]} mpe]
+        (doseq [prf satisfies]
+          (swap! by-proof-atm #(update-in % [prf :prob]
+                                          (fn [old-val] (if old-val (+ old-val prob) prob))))))
+      (->> @by-proof-atm
+           (reduce-kv (fn [m proof-id v]
+                        (assoc m proof-id
+                               (assoc v :props (-> proof-vecs proof-id :pvec-props))))
+                      {})
+           (reduce-kv (fn [res proof-id v]
+                        (conj res (assoc v :proof-id proof-id)))
+                      [])
+           (sort #(> (:prob %1) (:prob %2)))
+           (mapv #(into (sorted-map-by (this-order :props :prob :proof-id)) %))))))
 
 (defn report-solutions
   "Print an interpretation of the solutions either by proofs, or if :all-individuals?=true, by individual."
-  [{:keys [mpe params prop-ids query proof-vecs] :as kb} stream]
+  [{:keys [mpe params prop-ids query] :as kb} stream]
   (reset! diag kb)
   (cl-format stream "~%")
   (if (:all-individuals? params)
@@ -825,23 +839,15 @@
         (cl-format stream "~% Total probability: ~A" (->> mpe (map :prob) (apply +))))
     (if (empty? mpe)
       (cl-format stream "~%No solution.")
-      (let [by-proof-atm (atom {})]
-        (doseq [{:keys [prob model satisfies]} mpe]
-          (cl-format stream "~%prob:  ~,3f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
-                     prob
-                     model
-                     satisfies
-                     (solution-props model prop-ids query)))
-        (cl-format stream "~%")
-        (doseq [{:keys [prob satisfies]} mpe]
-          (doseq [prf satisfies]
-            (swap! by-proof-atm #(update % prf conj prob))))
-        (let [prob-by-proof (reduce-kv (fn [m k v] (assoc m k (apply + v))) {} @by-proof-atm)]
-          (doseq [[proof-id prob] (->> (seq prob-by-proof) (sort #(> (second %1) (second %2))))]
-            (cl-format stream "~% proof: ~A probability: ~,3f propositions: ~A"
-                       proof-id
-                       prob (-> proof-vecs proof-id :pvec-props)))))))
-  true)
+      (do (doseq [{:keys [prob model satisfies]} mpe]
+            (cl-format stream "~%prob:  ~,3f, model: [~{~3d~^,~}],  satisfies: ~A,  :pvec-props ~A"
+                       prob
+                       model
+                       satisfies
+                       (model-solution-props model prop-ids query)))
+          (cl-format stream "~%")
+          (doseq [{:keys [proof-id prob props]} (probability-by-proof kb)]
+            (cl-format stream "~%Proof: ~A Probability: ~,3f Propositions: ~A" proof-id prob props))))))
 
 (defn report-prop-ids
   [kb stream]
@@ -892,7 +898,6 @@
                       (:fact? step) (swap! res #(str % " " (-> step :form really!) " "))
                       (:assumption? step) (swap! res #(str % " " (-> step :form doall) " "))))
               @res))]
-    (cl-format stream "~%")
     (doseq [[proof-id prob] (->> kb :mpe :summary seq (sort-by #(-> % second)) reverse doall)]
       (cl-format stream "~%~9A : ~8,6f ~A" proof-id prob (proof-str proof-id)))))
 

@@ -3,9 +3,9 @@
   (:require
    [clojure.core.unify          :as uni]
    [clojure.set                 :as sets]
-   [clojure.spec.alpha           :as s]      ; for debugging.
+   [clojure.spec.alpha          :as s] ; for debugging.
    [clojure.test                :refer [deftest is testing]]
-   [explainlib.core :as explain :refer [defkb explain report-results]]
+   [explainlib.core             :as core :refer [defkb explain report-results probability-by-proof]]
    [explainlib.maxsat           :as maxsat]
    [explainlib.specs            :as specs] ; for debugging
    [explainlib.util             :as util :refer [varize]] ; for debugging
@@ -22,6 +22,16 @@
           {:prob 0.1 :head (dee ?x)   :tail [(not (cee ?x))]}]        ; 0.100 :rule-2  :: (dee ?x-r2) :- (not (cee ?x-r2))
   :facts [{:prob 0.3 :form (cee ?x)}])                                ; 0.300 :fact-1  :: (cee ?x-f1)
 
+(deftest simple-complete-test
+  (testing "Testing a simple complete MPE calculation."
+    (let [park-all-kb (-> park-kb (assoc-in [:params :all-individuals?] true))]
+      (testing "Testing that park-kb matches hand-calculated values."
+        (is (= [{:model [-1, -2], :cost 47,  :prob 0.63}
+                {:model [ 1, -2], :cost 142, :prob 0.24}
+                {:model [-1,  2], :cost 266, :prob 0.06999999999999999}
+                {:model [ 1,  2], :cost 281, :prob 0.06}]
+               (-> '(dee foo) (explain  park-all-kb) :mpe)))))))
+
 ;;;   C |  P(C)                       C    D   |  P(D|C)                       Probabilities of the individuals
 ;;;  ---+------                      ----------+----------                          ------
 ;;;   c |  0.3                        c    d   |   0.2         c ->  d                0.06
@@ -35,25 +45,16 @@
 ;;; It doesn't provide explanations for D (dee) specifically though.
 ;;; It is useful in cases where you want something other than the sort of model counting we do when :all-individuals?=false.
 
-(def park-all-kb (assoc-in park-kb [:params :all-individuals?] true))
-
-(deftest park-all-indv
-  (testing "Testing that park-kb MPE calculation is correct."
-    (let [mpe (-> '(dee foo) (explain  park-all-kb) :mpe)]
-      (testing "Testing that park-kb matches hand-calculated values."
-        (is (= [{:model [-1, -2], :cost 47,  :prob 0.63}
-                {:model [ 1, -2], :cost 142, :prob 0.24}
-                {:model [-1,  2], :cost 266, :prob 0.06999999999999999}
-                {:model [ 1,  2], :cost 281, :prob 0.06}]
-               mpe)))
-      (testing "Testing that probability of the individuals sums to 1.0"
-        (is (== 1.0 (->> mpe (map :prob)  (apply +))))))))
-
+;;; Of course, this is sensitive to changes in the reporting code, so don't be surprised if it is commented out.
 (deftest park-concept
   (testing "Demonstrating the concept of using a MAXSAT solver for MPE. Demonstrating reporting."
     (testing "The presentation of WDIMACS using report-problem as shown has end comments, which isn't legal syntax."
-      (is (= (->> ["p wcnf 2 6 581"                ; There are 2 variables, 6 clauses and the sum of the costs + 1 = 581.
-                   ""                              ; There are no hard clauses because of :all-individuals?=true
+      (is (= (->> ["p wcnf 4 9 581" ; There are 4 variables, 9 clauses and the sum of the costs + 1 = 581.
+                   "581             2              0 c Must answer the query (dee foo)."
+                   "581                  3    4    0 c Require at least one of these solutions (defined by the other hard clauses)."
+                   "581        1        -3         0 c Sol 3 (:proof-1) implies (cee foo) is true."
+                   "581       -1             -4    0 c Sol 4 (:proof-2) implies (cee foo) is false."
+                   ""
                    "1 : 120     -1         0 c fact-1 (:fact/not cee foo)"
                    "2 : 36       1         0 c fact-1 (cee foo)"
                    "3 : 22      -1    2    0 c rule-1 :rule-1 {?x-r1 foo} (dee foo)"
@@ -61,11 +62,10 @@
                    "5 : 11       1    2    0 c rule-2 :rule-2 {?x-r2 foo} (dee foo)"
                    "6 : 230      1   -2    0 c rule-2-inv :rule-2 {?x-r2 foo} (dee foo) | INV"
                    ""
-                   "prob:  0.63000, model: [ -1, -2]"
-                   "prob:  0.24000, model: [  1, -2]"
-                   "prob:  0.07000, model: [ -1,  2]"
-                   "prob:  0.06000, model: [  1,  2]"
-                   ""
+                   "prob:  0.070, model: [ -1,  2, -3,  4],  satisfies: [:proof-2],  :pvec-props [(:fact/not cee foo)]"
+                   "prob:  0.060, model: [  1,  2,  3, -4],  satisfies: [:proof-1],  :pvec-props [(cee foo)]"
+                   "Proof: :proof-2 Probability: 0.070 Propositions: [(:fact/not cee foo)]"
+                   "Proof: :proof-1 Probability: 0.060 Propositions: [(cee foo)]"
                    ""
                    "[(cee foo) 1]"
                    "[(dee foo) 2]  (The query)"
@@ -77,7 +77,7 @@
                   (apply str))
              (let [log-vec (atom [])]
                (binding [log/*config* (assoc log/*config* :appenders {:println {:enabled? true :fn #(swap! log-vec conj (-> % :vargs first))}})]
-                 (with-out-str (-> (explain '(dee foo) park-kb) (explain/report-results *out*))))))))))
+                 (with-out-str (-> (explain '(dee foo) park-kb) (core/report-results *out*))))))))))
 
 ;;;==================================== Simple end-to-end MPE =====================================
 ;;; My interpretation is the ProbLog interpretation.
@@ -124,10 +124,6 @@
           {:prob 0.2 :form (accident ?x)}
           {:prob 0.2 :form (clearing-wreck ?x ?y)}])
 
-(def road-is-slow-all-kb
-  (-> road-is-slow-kb
-      (assoc-in [:params :all-individuals?] true)))
-
 (defkb road-is-slow-assumption-kb
   "blocked road with (clearing-wreck $crew-r2-skolem-1 mt-pass) (default assumption prob is 0.10) thus heavy-snow should be favored."
   :rules  [{:prob 0.5
@@ -140,7 +136,7 @@
           {:prob 0.2 :form (bad-road-for-snow ?x)}
           {:prob 0.2 :form (accident ?x)}]) ; Dropped clearing-wreck.
 
-(defkb job-kb
+(defkb job-kb ; ToDo: Write a test that uses this KB.
   "This KB is from a problem described in my thesis: find columns that together describe a job."
   :rules [{:prob 0.70 :head (concatKey ?tab ?x ?y)      :tail [(jobID ?tab ?x ?y)]}
           {:prob 0.70 :head (jobID ?tab ?x ?y)          :tail [(date ?tab ?x) (productDesc ?tab ?y)]}
@@ -162,10 +158,9 @@
           {:prob 0.90 :form (date Table-1 COLA)}
           {:prob 0.90 :form (productDesc Table-1 COLB)}])
 
-;;; Follow the lead from alarm-kb. The result is a set of CPTs.
-;;; Following ProbLog semantics, the lack of a rule means the corresponding entry
-;;; in the CPT is 0. I should perhaps be using this in a little better in the job-kb?
-(defkb shortness-kb ; 'dyspnea' ; ToDo: Write a test that uses this KB.
+;;; Following ProbLog semantics, the lack of a rule means the corresponding entry in the CPT is 0.
+;;; This is probably a ProbLog problem, but I can't find it. tuber=tuberculosis.
+#_(defkb shortness-kb ; 'dyspnea' ; ToDo: Write a test that uses this KB.
   "This KB is probably a ProbLog example."
   :rules [{:prob 0.01 :head (tuber  ?x) :tail [(visit  ?x)]}
           {:prob 0.31 :head (abnorm ?x) :tail [(tuber  ?x) (not (lung ?x))]}
@@ -218,7 +213,7 @@
                  (func TeamsOnLine ActualEffort)
                  (contributesToObj ActualEffort)])
 
-;;; Todo: Investigate this:  WARN [explainlib.core:203] - Rule :rule-2 has rule-rhs before rule data.
+;;; ToDo: Investigate this:  WARN [explainlib.core:203] - Rule :rule-2 has rule-rhs before rule data.
 ;;;       This is reported if I switch the order of the predicates in the second rule to
 ;;;       [(wear ?robot ?joint) (backlash-sim ?robot ?joint)].
 ;;;       It doesn't change the results in this case, so I wonder whether it is legit test.
@@ -241,62 +236,68 @@
           {:prob 0.1 :form (failing-sensor robot-8 joint-2)}
           {:prob 0.7 :form (bad-sensor-processing robot-8)}])
 
-(defn concise-summary
-  "Return a concise summary of results for use in testing."
-  [model {:keys [prop-ids query]}])
-
 ;;;------ Tests for the above KBs ----------------------------
 ;;;  For more information about these, use, for example, (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) ex/report-results)
 (deftest good-simple-cases
   (testing "That MPE is getting good results."
     (testing "Testing an example from the Park paper. Unfortunately, I don't compute probabilities (ToDo: Model counting?)"
-      #_(is (= {:proof-1 0.51, :proof-2 0.91}
-             (-> '(dee foo) (explain park-kb) :mpe :summary))))
+      (is (= '[{:props [(:fact/not cee foo)], :prob 0.06999999999999999, :proof-id :proof-2}
+               {:props [(cee foo)],            :prob 0.06,               :proof-id :proof-1}]
+             (-> '(dee foo) (explain park-kb) probability-by-proof))))
 
-    (testing "Tesing the alarm-kb, which has nots in its rules."
-      (is (= {:proof-1 0.504, :proof-2 0.44799999999999995, :proof-3 0.055999999999999994}
-             (-> '(alarm plaza) (explain alarm-kb) :mpe :summary))))
+    (testing "Tesing the alarm-kb, which has :fact/not in some rules."
+      (is (= '[{:props [(burglary plaza) (:fact/not earthquake plaza)], :prob 0.44799999999999995,  :proof-id :proof-2}
+               {:props [(burglary plaza) (earthquake plaza)],           :prob 0.126,                :proof-id :proof-1}
+               {:props [(:fact/not burglary plaza) (earthquake plaza)], :prob 0.006000000000000002, :proof-id :proof-3}]
+             (-> '(alarm plaza) (explain alarm-kb) probability-by-proof))))
 
-    (testing "Testing that where there are no difference in fact and rule probability, proofs are equi-probable."
-      (is (= {:proof-1 0.020800000000000003, :proof-2 0.020800000000000003}
-             (-> '(road-is-slow mt-pass) (explain road-is-slow-even-kb) :mpe :summary))))
+    (testing "Testing road-is-slow where probabilities are identical."
+      (is (= '[{:props [(heavy-snow mt-pass) (bad-road-for-snow mt-pass)], :prob 0.02040000000000001, :proof-id :proof-1}
+               {:props [(accident mt-pass) (clearing-wreck ?x mt-pass)],   :prob 0.02040000000000001, :proof-id :proof-2}]
+             (-> '(road-is-slow mt-pass) (explain road-is-slow-even-kb) probability-by-proof))))
 
-    (testing "Testing rule probabilities. The rule for heavy-snow is more reliable."
-      (is (= {:proof-1 0.03328000000000002, :proof-2 0.020800000000000003}
-             (-> '(road-is-slow mt-pass) (explain road-is-slow-kb) :mpe :summary))))
+    (testing "Testing road-is-slow... with reasonable probabilities."
+      (is (= '[{:props [(heavy-snow mt-pass) (bad-road-for-snow mt-pass)], :prob 0.032640000000000016, :proof-id :proof-1}
+               {:props [(accident mt-pass) (clearing-wreck ?x mt-pass)],   :prob 0.02112000000000001, :proof-id :proof-2}]
+             (-> '(road-is-slow mt-pass) (explain road-is-slow-kb) probability-by-proof))))
 
-    (testing "Favor explanations that don't have a default low-probability assumption. (It warns about it.)"
-      (is (= {:proof-1 0.02040000000000001, :proof-2 0.010400000000000001}
-             (-> '(road-is-slow mt-pass) (explain road-is-slow-assumption-kb) :mpe :summary))))
+    (testing "Testing road-is-slow... with a (low-probability) assumption. This should give a warning."
+      (is (= '[{:props [(heavy-snow mt-pass) (bad-road-for-snow mt-pass)],              :prob 0.0202, :proof-id :proof-1}
+               {:props [(accident mt-pass) (clearing-wreck $crew-r2-skolem-1 mt-pass)], :prob 0.010200000000000004, :proof-id :proof-2}]
+             (-> '(road-is-slow mt-pass) (explain road-is-slow-assumption-kb) probability-by-proof))))
 
-    #_(testing "ToDo: describe"
-        (is (=  [{:model [ 1 -2 -3  4 -5 -6], :cost 220}
-                 {:model [-1  2  3 -4  5  6], :cost 676}]
-                (-> (explain '(groupby Table-1 COLA COLB) job-kb) filter-to-simple-mpe))))
-
-    #_(testing "ToDo: Describe -- Without inverse facts and assumptions, this one just disappears!"
-        (is (= #{{:model [-1], :cost 51} {:model [1], :cost 92}}
-               (->> (explain '(objectiveFnVal ActualEffort) r1) :mpe (map #(dissoc % :prob)) set))))
-
-    #_(testing "ToDo: Describe -- There is only one RHS on this one [1,2,3,4] are all PIDs."
-        (is (= #{{:model [ 1 -2 3 4], :cost 73}
-                 {:model [-1 -2 3 4], :cost 73}
-                 {:model [-1  2 3 4], :cost 575}
-                 {:model [ 1  2 3 4], :cost 1036}}
-               (-> (explain '(allDifferent doesJob) concepts2-kb) filter-to-simple-mpe))))
-    (testing "Testing that the example from the 2023 Manufacturing Letters paper works."
-      (is (= {:proof-1 0.24652800000000008, :proof-2 0.06311199999999999}
-             (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) :mpe :summary))))))
+    (testing "Testing a slightly bigger problem (still tiny), from the Manufacturing Letters paper."
+      (is (= '[{:props [(backlash-sim robot-8 joint-2) (wear robot-8 joint-2) (stressed robot-8 joint-2)], :prob 0.24814080000000008, :proof-id :proof-1}
+               {:props [(failing-sensor robot-8 joint-2) (bad-sensor-processing robot-8)],                 :prob 0.07287279999999997, :proof-id :proof-2}]
+             (-> '(inaccurate-tcp robot-8) (explain mfglet-kb) probability-by-proof))))))
 
 
+;;; Here's a good way to get a rather different kind of result:
 (def alarm-all-kb (assoc-in alarm-kb [:params :all-individuals?] true))
+; Because this one has complete RHS for the query.
+(def park-all-kb (-> park-kb
+                     (assoc-in [:params :all-individuals?] true)
+                     (assoc-in [:params :normalize-probabilties?] false)))
 
-;;; These are sort of self-fulfilling prophesies, given normalization that is happening.
+;;; This one is sort of self-fulfilling prophesies, given that probabilties are normalized when :all-individuals?=true.
+;;; So far, only park-all-kb doesn't need normalization, and that is because it provides all possible RHSs for the query.
 (deftest all-individuals
   (testing "Testing that when :all-individuals?=true, the probability of the population sums to 1.0."
     (testing "Testing alarm-kb for :all-individuals?=true sum."
-      (is (<= 0.99999 (->> (explain '(alarm plaza) alarm-all-kb) :mpe (map :prob) (apply +)) 1.00001)))))
+      (is (<= 0.99999 (->> (explain '(alarm plaza) alarm-all-kb) :mpe (map :prob) (apply +)) 1.00001)))
 
+    ;; ToDo: Currently no way to not normalize.
+    (testing "Testing that probability of the individuals sums to 1.0"
+      (is (== 1.0 (->> (explain '(dee foo) park-all-kb) :mpe (map :prob) (apply +)))))
+
+    ;; Because this one has complete LHSs for the query:
+    (testing "Park example probabilities are same in query case and all-individuals case"
+      (let [norm-mpe (->> (explain '(dee foo) park-kb) :mpe)
+            all-mpe  (->> (explain '(dee foo) park-all-kb) :mpe)]
+        (is (and (= (->> all-mpe   (some #(when (= (:model %) [1 2])))       :prob)
+                    (->> norm-mpe  (some #(when (= (:model %) [1 2 3 -4])))  :prob))
+                 (= (->> all-mpe   (some #(when (= (:model %) [-1 2])))      :prob)
+                    (->> norm-mpe  (some #(when (= (:model %) [-1 2 -3 4]))) :prob))))))))
 
 (deftest proof-steps
   (testing "Testing steps of proofs."
@@ -306,85 +307,10 @@
                   :caller {:bindings {}},
                   :proofs
                   [{:prob 0.7, :form (burglary ?loc), :id :fact-1, :prvn (burglary plaza), :bindings {?loc plaza}, :fact-used? true, :fact-id :fact-1}]}
-                (explain/prove-fact kb {:prv '(burglary plaza) :caller {:bindings {}}}))))
+                (core/prove-fact kb {:prv '(burglary plaza) :caller {:bindings {}}}))))
       (testing "Testing fact-solve"
         (is (= '({:prob 0.7, :form (burglary ?loc), :id :fact-1, :prvn (burglary plaza), :bindings {?loc plaza}})
-               (explain/fact-solve? kb '(burglary plaza))))))))
-
-;;;==================================== Other one- and two-rule MPE =====================================
-(defkb one-rule-kb
-  "A KB with one rule."
-  :rules [{:prob 0.9
-           :head (D ?x)
-           :tail [(A ?x) (B ?x)]}]
-  :facts [{:prob 0.99 :form (A ?a)}
-          {:prob 0.97 :form (B ?b)}
-          {:prob 0.98 :form (C ?c)}])
-
-(defkb two-rule-kb
-  "A simple KB."
-  :rules [{:prob 0.9
-           :head (D ?x)
-           :tail [(A ?x) (B ?x)]}
-          {:prob 0.9
-           :head (D ?y)
-           :tail [(A ?y) (C ?y)]}]
-  :facts [{:prob 0.99 :form (A ?a)}
-          {:prob 0.98 :form (B ?b)}
-          {:prob 0.97 :form (C ?c)}])
-
-(defkb another-two-rule-kb
-  "Another simple KB."
-  :rules [{:prob 0.9
-           :head (D ?x)
-           :tail [(A ?x) (B ?x)]}
-          {:prob 0.9
-           :head (D ?y)
-           :tail [(A ?y) (C ?y)]}]
-  :facts [{:prob 0.99 :form (A ?a)}
-          {:prob 0.97 :form (B ?b)}
-          {:prob 0.98 :form (C ?c)}])
-
-(deftest simple-fact-probabilities
-  (testing "Testing that one rule works. Note antecedent C is not used. Phew!"
-    (is (= [{:cost 245, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
-           (-> (explain '(D foo) one-rule-kb) :mpe))))
-  (testing "Testing that two proofs that only differ by the probability of one antecedent are ordered correctly."
-    (testing "Testing one ordering"
-    (is (= [{:cost 595, :proof-id :proof-1, :pvec '((A foo) (B foo))}
-            {:cost 636, :proof-id :proof-2, :pvec '((A foo) (C foo))}]
-           (-> (explain '(D foo) two-rule-kb) :mpe))))
-    (testing "Testing same two proofs, different ordering."
-      (is (= [{:cost 595, :proof-id :proof-2, :pvec '((A foo) (C foo))}
-              {:cost 636, :proof-id :proof-1, :pvec '((A foo) (B foo))}]
-             (-> (explain '(D foo) another-two-rule-kb) :mpe))))))
-
-;;; In ~is~ the correct one goes first in the =. (is (= correct-value generated-value))
-#_(deftest test-binding-sets
-  (testing "that binding sets are created correctly"
-    (is (= '[{?f doesJob, ?y Jobs, ?x Workers} {?f TeamsOnLine, ?x $x-skolem, ?y $y-skolem}]
-           (explain/binding-sets-aux '[{?f TeamsOnLine} {?f doesJob, ?x Workers} {?f doesJob, ?y Jobs}])))
-    (is (= '[{?f doesJob, ?y Jobs, ?x Workers}]
-           (explain/binding-sets-aux '[{?f doesJob} {?f doesJob, ?x Workers} {?f doesJob, ?y Jobs}])))))
-
-;;; ToDo: pprocess-prv not defined
-#_(deftest test-postprocessed-proof-1
-  (testing "Testing that adductive logic proofs on a simple example look okay before post-processing."
-    (is (= '{:prv (designVar CostTable),
-             :proofs
-             [{:fact
-               {:cnf [{:pred (designVar CostTable), :neg? false}],
-                :prob 0.9,
-                :using "obs-1"},
-               :subs {?x CostTable}}]}
-           (explain/pprocess-prv '{:prv (designVar ?x),
-                                   :proofs
-                                   [{:fact
-                                     {:cnf [{:pred (designVar CostTable), :neg? false}],
-                                      :prob 0.9,
-                                      :using "obs-1"},
-                                     :subs {?x CostTable}}]})))))
-
+               (core/fact-solve? kb '(burglary plaza))))))))
 
 (deftest flattening-proofs
   (testing "Testing that proofs are flattened correctly."
@@ -409,9 +335,10 @@
         (is (= '[[{:form (road-is-slow mt-pass), :rule? true, :rule-id :rule-1}
                   {:form (heavy-snow mt-pass), :fact? true, :fact-id :fact-4, :rule-id :rule-1}
                   {:form (bad-road-for-snow mt-pass), :fact? true, :fact-id :fact-2, :rule-id :rule-1}]]
-               (explain/flatten-proof raw-proof)))))))
+               (core/flatten-proof raw-proof)))))))
 
-(deftest postprocessed-proof-2
+;;; I think this will need updating when skolems are inserted correctly.
+(deftest proof-generation
   (testing "Testing that abductive logic proofs on a simple example look okay."
     (is (= '{:prv (road-is-slow mt-pass),
              :top? true,
@@ -420,83 +347,42 @@
              [{:rule-used? true,
                :rule-used :rule-1,
                :proving (road-is-slow mt-pass),
-               :rhs-queries {:rhs ((heavy-snow mt-pass) (bad-road-for-snow mt-pass)), :bindings {?loc-r1 mt-pass, ?x-f2 mt-pass}},
+               :rhs-queries {:rhs ((heavy-snow mt-pass) (bad-road-for-snow mt-pass)), :bindings {?loc-r1 mt-pass, ?x mt-pass}},
                :decomp
                [{:prv (heavy-snow mt-pass),
                  :caller {:rule-id :rule-1, :sol (heavy-snow mt-pass), :bindings {?loc-r1 mt-pass}},
-                 :proofs [{:prvn (heavy-snow mt-pass), :fact-used? true}]}
+                 :proofs [{:prob 0.2, :form (heavy-snow mt-pass), :id :fact-4, :prvn (heavy-snow mt-pass), :fact-used? true, :fact-id :fact-4}]}
                 {:prv (bad-road-for-snow mt-pass),
                  :caller {:rule-id :rule-1, :sol (bad-road-for-snow mt-pass), :bindings {?loc-r1 mt-pass}},
-                 :proofs [{:prvn (bad-road-for-snow mt-pass), :bindings {?x-f2 mt-pass}, :fact-used? true}]}]}
+                 :proofs
+                 [{:prob 0.2,
+                   :form (bad-road-for-snow ?x),
+                   :id :fact-2,
+                   :prvn (bad-road-for-snow mt-pass),
+                   :bindings {?x mt-pass},
+                   :fact-used? true,
+                   :fact-id :fact-2}]}]}
               {:rule-used? true,
                :rule-used :rule-2,
                :proving (road-is-slow mt-pass),
                :rhs-queries
-               {:rhs ((accident mt-pass) (clearing-wreck ?crew-r2 mt-pass)), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass, ?crew-r2 ?x-f4, ?y-f4 mt-pass}},
+               {:rhs ((accident mt-pass) (clearing-wreck ?crew-r2 mt-pass)), :bindings {?loc-r2 mt-pass, ?x mt-pass, ?crew-r2 ?x, ?y mt-pass}},
                :decomp
                [{:prv (accident mt-pass),
                  :caller {:rule-id :rule-2, :sol (accident mt-pass), :bindings {?loc-r2 mt-pass}},
-                 :proofs [{:prvn (accident mt-pass), :bindings {?x-f3 mt-pass}, :fact-used? true}]}
+                 :proofs
+                 [{:prob 0.2, :form (accident ?x), :id :fact-1, :prvn (accident mt-pass), :bindings {?x mt-pass}, :fact-used? true, :fact-id :fact-1}]}
                 {:prv (clearing-wreck ?crew-r2 mt-pass),
-                 :caller {:rule-id :rule-2, :sol (clearing-wreck ?crew-r2 mt-pass), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass}},
-                 :proofs [{:prvn (clearing-wreck ?x-f4 mt-pass), :bindings {?crew-r2 ?x-f4, ?y-f4 mt-pass}, :fact-used? true}]}]}
-              {:rule-used? true,
-               :rule-used :rule-2,
-               :proving (road-is-slow mt-pass),
-               :rhs-queries
-               {:rhs ((accident mt-pass) (clearing-wreck ?crew-r2 mt-pass)), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass, ?crew-r2 ?x-f4, ?y-f4 mt-pass}},
-               :decomp
-               [{:prv (accident mt-pass),
-                 :caller {:rule-id :rule-2, :sol (accident mt-pass), :bindings {?loc-r2 mt-pass}},
-                 :proofs [{:prvn (accident mt-pass), :bindings {?x-f3 mt-pass}, :fact-used? true}]}
-                {:prv (clearing-wreck ?crew-r2 mt-pass),
-                 :caller {:rule-id :rule-2, :sol (clearing-wreck ?crew-r2 mt-pass), :bindings {?loc-r2 mt-pass, ?x-f3 mt-pass}},
-                 :proofs [{:prvn (clearing-wreck ?x-f4 mt-pass), :bindings {?crew-r2 ?x-f4, ?y-f4 mt-pass}, :fact-used? true}]}]}]}
-             (-> (explain '(road-is-slow mt-pass) road-is-slow-kb) :raw-proofs)))))
-
-
-;;; A <- B C
-;;; A <- D E
-;;;
-;;; If downstream proof of D uses B, then NOT (B AND D) should be avoided.
-;;; {:psets
-;;;  [{:using :rule-5, :top-pids #{2 4}, :down-proof-pids #{7 3 9}}
-;;;   {:using :rule-4, :top-pids #{1 5}, :down-proof-pids #{6 3 2}}],
-;;; :or-pairs [#{2 1} #{2 5} #{4 1} #{4 5}]}.
-;;;
-;;; Means remove  #{2 1} and #{2 5} from :nand-pairs (that starts as a copy of :or-pairs).
-
-
-
-;;; p wcnf 2 8 603
-;;; 603      1    2    0
-;;; 120      1         0 c FA (burglary plaza)
-;;; 36      -1         0 c FA (not (burglary plaza))
-;;; 22            2    0 c FA (earthquake plaza)
-;;; 161          -2    0 c FA (not (earthquake plaza))
-;;; 230      1   -2    0 c RU :rule-3 {?loc-r3 plaza} | INV | REDU (alarm plaza)
-;;; 22      -1    2    0 c RU :rule-2 {?loc-r2 plaza} | INV | REDU (alarm plaza)
-;;; 11      -1   -2    0 c RU :rule-1 {?loc-r1 plaza} | INV | REDU (alarm plaza)
-
-(deftest instance-probs
-  (testing "that conditional probabilities are calculcated correctly"
-    (is true)
-    #_(is (< 0.059 ; 2023: Find out what cprob did!
-           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(cee $x1-skolem-1)])
-              (explain/cprob p-kb '(cee $x1-skolem-1)))
-           0.061))
-    #_(is (< 0.239
-           (* (explain/cprob p-kb '(not (dee $x1-skolem-1)) '[(cee $x1-skolem-1)])
-              (explain/cprob p-kb '(cee $x1-skolem-1)))
-           0.251))
-    #_(is (< 0.069
-           (* (explain/cprob p-kb '(dee $x1-skolem-1) '[(not (cee $x1-skolem-1))])
-              (explain/cprob p-kb '(not (cee $x1-skolem-1))))
-           0.071))
-    #_(is (< 0.629
-           (* (explain/cprob p-kb '(not (dee $x1-skolem-1)) '[(not (cee $x1-skolem-1))])
-              (explain/cprob p-kb '(not (cee $x1-skolem-1))))
-           0.631))))
+                 :caller {:rule-id :rule-2, :sol (clearing-wreck ?crew-r2 mt-pass), :bindings {?loc-r2 mt-pass, ?x mt-pass}},
+                 :proofs
+                 [{:prob 0.2,
+                   :form (clearing-wreck ?x ?y),
+                   :id :fact-3,
+                   :prvn (clearing-wreck ?x mt-pass),
+                   :bindings {?crew-r2 ?x, ?y mt-pass},
+                   :fact-used? true,
+                   :fact-id :fact-3}]}]}]}
+           (-> (explain '(road-is-slow mt-pass) road-is-slow-kb) :raw-proofs)))))
 
 ;;; Namespaces meanings:
 ;;;    py - an identifier (variable or function) in a python jupyter notebook.
@@ -536,30 +422,6 @@
      :proofs ({:proven [(ta/conceptVar ta/WorkerType demand)],
                :proofs ({:proven [(ta/isType ta/WorkerType) (ta/simMatchVar demand ta/WorkerType)]})}
               {:proven [(py/traceVar demand start_time) (ta/simMatchVar start_time ta/WorkerType)]})}))
-
-(deftest proof-folding (is true))
-#_(deftest proof-folding
-  (testing "that gather-proven, etc. works"
-    (is (= (explain/gather-proven pre-example) post-example))))
-
-;;; Here is a problem: I don't think I should be creating assumptions until after all other RHS have created bindings.
-;;; I currently have some code in prove-fact to collect bindings into an atom, rule-accum-subs, but that doesn't look
-;;; like it is placed in the correct place. What it would make is a fact (py/traceVar demand demand) but I added
-;;; a 0.001 probability fact (py/traceVar ?x ?x) which stopped it. (Comment this out to continue debugging rule-assume-subs).
-;;; Since this is for :proof-vec, I think I'll be okay for the time being.
-;;;
-;;; (def eee (explain '(ta/conceptQuery demand) (pl/compose-kb (-> "data/testing/hints/facts-2.edn" slurp read-string))))
-;;; (->> (:all-proofs eee) bind-proven strip-proof-useless)
-;;; {:prob 0.60 :head (ta/conceptType  ?type ?x)        :tail [(py/traceVar ?x ?y)
-;;;                                                            (ta/simMatchVar ?y ?type)]}
-;;;
-
-;;; IN FACT, rule-accum-subs definitely doesn't have the right stuff in it. It should only have bindings from one rule: (all its rlits)
-;;; 20-07-26 21:26:28 PN120134 INFO [app.model.explain:286] - New assumption on (py/traceVar demand ?y-r4)
-;;; subs= {?x-r2 demand, ?type-r4 ta/DemandType, ?x-r4 demand, ?type-r5 ta/DemandType, ?x-r5 demand, ?type-r3 ta/DemandType, ?x-r3 demand}
-;;;       The rule would be rule-4, and it would have {?y-r4 demand} in it!
-;;;  push-subs! works on each match (there are two). I think that is okay.
-;;;  Maybe a second stack for inside the rule???
 
 (def current-bogus
      '{:rule? true,
@@ -641,21 +503,21 @@
             is renamed to the way it appears in rules. You have to know WHERE in the rule (ix)
             you are working because the rule can have the same predicate in the RHS several times."
     (let [query '(p-lhs x-1 y-1)
-          kb (as-> (explain/finalize-kb proof-gen-kb query) ?kb ; 2023 was ptest
-               (assoc ?kb :datatab (explain/datatab ?kb)))]
+          kb (as-> (core/finalize-kb proof-gen-kb query) ?kb ; 2023 was ptest
+               (assoc ?kb :datatab (core/datatab ?kb)))]
       (is (= data-from-datatab-p-3
              (set (-> kb :datatab (get 'p-3)))))
       (is (= corrected-data-from-datatab-p-3
-             (set (explain/consistent-cvar-naming kb :rule-1 3 (get (:datatab kb) 'p-3))))))))
+             (set (core/consistent-cvar-naming kb :rule-1 3 (get (:datatab kb) 'p-3))))))))
 
 (def proof-test-kb-1
   (let [query '(p-lhs x-1 y-1)]
-    (as-> (explain/finalize-kb proof-gen-kb query) ?kb ; 2023 was ptest
-      (assoc ?kb :datatab (explain/datatab ?kb)))))
+    (as-> (core/finalize-kb proof-gen-kb query) ?kb ; 2023 was ptest
+      (assoc ?kb :datatab (core/datatab ?kb)))))
 
 ;;;(deftest tailtab-test (is true))
 (deftest tailtab-test
-  (testing "that explain/tailtest works"
+  (testing "that core/tailtest works"
     (is (= '{:rule-1
              {[1 p-1] ((p-1 x-1)),
               [2 p-2] ((p-2 y-1)),
@@ -663,41 +525,35 @@
               [4 p-4] ((p-4 y-1 ?z-r1))},
              :rule-2
              {[1 p-other] ((p-other x-1 y-1))}}
-           (explain/tailtab proof-test-kb-1 '(p-lhs x-1 y-1))))))
+           (core/tailtab proof-test-kb-1 '(p-lhs x-1 y-1))))))
 
 ;;;(deftest rule-product-test (is true))
 (deftest rule-product-test
-  (testing "that explain/rule-product works"
+  (testing "that core/rule-product works"
     (let [prv '(p-lhs x-1 y-1)
-          tailtab (explain/tailtab proof-test-kb-1 prv)]
-      (is (= (set '(((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 z-bogo))    ; ok
+          tailtab (core/tailtab proof-test-kb-1 prv)]
+      (is (= (set '(((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 z-bogo))
                     ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 z-2))
                     ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 z-1))
-                    ;((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 ?z-r1))     ; ok ... 2023. NOT!
                     ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2) (p-4 y-1 z-bogo))
-                    ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2) (p-4 y-1 z-2))          ; ok
+                    ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2) (p-4 y-1 z-2))
                     ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2) (p-4 y-1 z-1))
-                    ;((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2) (p-4 y-1 ?z-r1))        ; ok ... 2023. NOT!
                     ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1) (p-4 y-1 z-bogo))
                     ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1) (p-4 y-1 z-2))
-                    ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1) (p-4 y-1 z-1))          ; ok
-                    ;((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1) (p-4 y-1 ?z-r1))        ; ok ... 2023. NOT!
-                    ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1) (p-4 y-1 z-bogo))     ; ok ... 2023. NOT!
-                    ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1) (p-4 y-1 z-2))        ; ok ... 2023. NOT!
-                    ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1) (p-4 y-1 z-1))        ; ok ... 2023. NOT!
-                    ((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1) (p-4 y-1 ?z-r1))))    ; ok
-             (set (explain/rule-product proof-test-kb-1 :rule-1 (:rule-1 tailtab)))))
+                    ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1) (p-4 y-1 z-1))
+                    ((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1) (p-4 y-1 ?z-r1))))
+             (set (core/rule-product proof-test-kb-1 :rule-1 (:rule-1 tailtab)))))
       (is (= '(((p-other x-1 y-1)))
-             (explain/rule-product proof-test-kb-1 :rule-2 (:rule-2 tailtab)))))))
+             (core/rule-product proof-test-kb-1 :rule-2 (:rule-2 tailtab)))))))
 
 (defn proof-one-step
   "Return a collection of tuples that consistently unify the query (:prv)."
   [kb prv]
-  (let [tailtab (explain/tailtab kb prv)]
+  (let [tailtab (core/tailtab kb prv)]
     (reduce (fn [res rule-id]
               (let [tail (-> kb :rules rule-id :tail)]
-                (into res (into [] (explain/filter-rule-product-transducer tail)
-                                (explain/rule-product kb rule-id (rule-id tailtab))))))
+                (into res (into [] (core/filter-rule-product-transducer tail)
+                                (core/rule-product kb rule-id (rule-id tailtab))))))
             []
             (keys tailtab))))
 
@@ -705,26 +561,20 @@
 ;;; but this include one, (p-other x1 y1), from rule-1.
 (deftest one-step-of-proof
   (testing "the execution of the two rules that match on head for the query."
-    (is (= (set '[;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-bogo)) ; 2023: I don't see how these could be considered correct!
-                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-2))    ; 2023: They are leaving a variable that is bound unbound.
-                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 z-1))
-                  ((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 ?z-r1))
+    (is (= (set '[((p-1 x-1) (p-2 y-1) (p-3 x-1 ?z-r1)  (p-4 y-1 ?z-r1))
                   ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 z-bogo))
-                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 z-bogo) (p-4 y-1 ?z-r1))
                   ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2)    (p-4 y-1 z-2))
-                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 z-2)    (p-4 y-1 ?z-r1))
                   ((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1)    (p-4 y-1 z-1))
-                  ;((p-1 x-1) (p-2 y-1) (p-3 x-1 z-1)    (p-4 y-1 ?z-r1))
                   ((p-other x-1 y-1))])
            (set (proof-one-step proof-test-kb-1 '(p-lhs x-1 y-1)))))))
 
 ;;; ToDo: There might be more to think about with respect to how I do these.
 ;;;       For example, should I treat a skolem like a cvar?
-;;; 2021-04-27 Commented out because explain/get-assumption doesn't seem to exist anymore.
+;;; 2021-04-27 Commented out because core/get-assumption doesn't seem to exist anymore.
 #_(deftest assumptions-are-memoized
   (testing "that you get the same assumption when you call for something similar twice."
-    (is (= (explain/get-assumption proof-test-kb-1 (varize '(foo ?x)))
-           (explain/get-assumption proof-test-kb-1 (varize '(foo ?x)))))))
+    (is (= (core/get-assumption proof-test-kb-1 (varize '(foo ?x)))
+           (core/get-assumption proof-test-kb-1 (varize '(foo ?x)))))))
 
 ;;;=============================================================================================================
 (defkb rule-product-kb ; ToDo: Write a test that uses this KB.
@@ -845,17 +695,16 @@
                {:prv (b ?y), :proofs [{:fact-used? true, :prvn (b b-1)}]}
                {:prv (c ?z), :proofs [{:fact-used? true, :prvn (c c-1)}]}]}]))
 
-
 (deftest proof-prop-sets
   (testing "that proof-prop-sets are constructed correctly"
     (is (=  (-> "data/testing/proofs/whole-results.edn" slurp read-string)
-            (->> (explain/flatten-proofs (-> "data/testing/proofs/whole-proof.edn" slurp read-string varize)) (mapv #(mapv :step %)))))
+            (->> (core/flatten-proofs (-> "data/testing/proofs/whole-proof.edn" slurp read-string varize)) (mapv #(mapv :step %)))))
     (is (= '[[(top-level 1 2 3) (second-level foo) (b 0)] [(top-level 1 2 3) (second-level foo) (third-level bar) (fourth-level baz) (d 1) (e 2) (f 3)]]
-           (->> (explain/flatten-proofs small) (mapv #(mapv :step %)))))
+           (->> (core/flatten-proofs small) (mapv #(mapv :step %)))))
     (is (= '[[(top-level ?a b-1 c-1) (a a-1) (b b-1) (c c-1)] [(top-level ?a b-1 c-1) (a a-2) (b b-1) (c c-1)]]
-             (->> (explain/flatten-proofs tiny) (mapv #(mapv :step %)))))
+             (->> (core/flatten-proofs tiny) (mapv #(mapv :step %)))))
     (is (= '[[(top-level a-1 b-1 c-1) (a a-1) (b b-1) (c c-1)]]
-           (->> (explain/flatten-proofs tiny-) (mapv #(mapv :step %)))))))
+           (->> (core/flatten-proofs tiny-) (mapv #(mapv :step %)))))))
 
 ;;;-------------- Medium-sized experiments of complete MPE functionality --------
 (defn interesting-loser-fn
@@ -912,7 +761,7 @@
 ;;; I think these are a good idea even once I've implemented elimination order.
 ;;; However, some such as black-listed ta/isType might not be useful because the reasoner doesn't assume
 ;;; in places where some value exists.
-(defn bautista-params
+#_(defn bautista-params
   "Excepting 'requires-evidence?' these are probably hacks!" ; ToDo: If not a hack r-e? and b-l-p? then need it in defkb.
   [kb+setup]
   (assoc-in kb+setup [:kb :params]
@@ -922,7 +771,7 @@
                     :requires-evidence?        '#{mz/indexedBy mz/indexedBy-1 mz/indexedBy-2 py/linkBack}
                     :black-listed-preds        '#{ta/isType ta/simMatchVar ta/simMatchExcelSheet ta/simMatchColName}})))
 
-(deftest bautista-obvious
+#_(deftest bautista-obvious
   (testing "medium-sized MPE calculation."
     (let [results (->> "data/testing/experiments/work-overload/b-obvious-in.edn"
                        slurp

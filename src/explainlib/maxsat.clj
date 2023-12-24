@@ -366,7 +366,7 @@
                  soft-clauses)
          (apply *))))
 
-;;; ToDo: Study the literature on proof counting and fix this.
+;;; ToDo: Study the literature on model counting and fix this if necessary.
 (defn indv-probabilities
   "Calculate the probability of each individual.
    If the analysis is :all-individuals?=true, there may not be pclauses that provide probability for the query,
@@ -378,7 +378,7 @@
    by proofs they satisfy."
   [py-results {:keys [soft-clauses params]}]
   (let [raw-prob-indvs (map #(assoc % :prob (-> % :model (indv-probability-aux soft-clauses))) py-results)]
-    (if (:all-individuals? params)
+    (if (and (:all-individuals? params) (:normalize-probabilities? params))
       (let [normal (->> raw-prob-indvs (map :prob) (apply +))]
         (map (fn [indv] (update indv :prob #(/ % normal))) raw-prob-indvs))
       raw-prob-indvs)))
@@ -645,6 +645,11 @@
                                            clauses
                                            (map #(str "clause-" %) (range 1 (-> clauses count inc))))))
     (assoc  ?game-kb :wdimacs (wdimacs-string ?game-kb))
+    (if (s/valid? ::specs/game-ready-obj ?game-kb)
+        ?game-kb
+        (do
+          (s/explain ::specs/game-ready-obj ?game-kb)
+          (throw (ex-info "Problem generating a game-ready object." {}))))
     (reset! diag ?game-kb))) ; Might be good to keep this one around.
 
 (def ngames-played (atom 0))

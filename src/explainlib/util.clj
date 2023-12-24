@@ -7,6 +7,13 @@
    [mount.core                   :refer [defstate]]
    [taoensso.timbre              :as log]))
 
+(defn this-order
+  "Return a comparator function for use with sorted-map-by that places the keys in that order."
+  [& map-keys]
+  (fn [k1 k2]
+    (< (.indexOf map-keys k1)
+       (.indexOf map-keys k2))))
+
 (defn combinations-1
   "Create all combinations of elements from the sets, taking one item from each"
   [& sets]
